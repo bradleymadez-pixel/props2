@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PropAI — Perth Property Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%}
+body{background:#0B0E16;color:#EDF0FA;font-family:'Outfit',sans-serif;font-size:14px}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:#353A52;border-radius:2px}
+textarea,input,select{background:#0B0E16;border:1px solid rgba(255,255,255,0.08);border-radius:9px;color:#EDF0FA;font-family:'Outfit',sans-serif;font-size:13px;padding:10px 13px;width:100%;outline:none;resize:vertical;-webkit-appearance:none}
+input[type=color]{padding:3px;height:36px;cursor:pointer}
+input:focus,textarea:focus,select:focus{border-color:#D4A843}
+select option{background:#12151F}
+::placeholder{color:#353A52}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.fade{animation:fadeUp .2s ease forwards}
+.slide{animation:slideUp .25s ease forwards}
+details>summary{list-style:none;cursor:pointer}
+details>summary::-webkit-details-marker{display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useCallback,useRef}=React;
+
+// ── AI (Haiku — high rate limits, never blocks) ───────────────────────────────
+const API="https://api.anthropic.com/v1/messages";
+async function ai(sys,usr){
+  try{
+    const r=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:1000,system:sys,messages:[{role:"user",content:usr}]})});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error.message);
+    return d.content?.map(b=>b.text||"").join("")||"";
+  }catch(e){throw e;}
+}
+
+// ── Storage (localStorage for Vercel) ────────────────────────────────────────
+const SK="propai:v9";
+function load(){try{const d=localStorage.getItem(SK);return d?JSON.parse(d):null;}catch{return null;}}
+function persist(d){try{localStorage.setItem(SK,JSON.stringify(d));}catch{}}
+function makeCode(p){return p.toUpperCase()+"-"+Math.random().toString(36).slice(2,6).toUpperCase();}
+function now(){return new Date().toLocaleString("en-AU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}
+const PERTH_MARKET={v:"0.8%",med:"$961,000",growth:"+18.4%",rents:"+5.2%",dom:9,yield:"3.8%",updated:"April 2026"};
+const WA_RULES=[{id:"c1",rule:"7 days written notice for routine inspections",risk:"high",cat:"Inspections"},{id:"c2",rule:"60 days notice for rent increases (up from 30)",risk:"high",cat:"Rent increases"},{id:"c3",rule:"Landlords cannot unreasonably refuse pets",risk:"medium",cat:"Pets"},{id:"c4",rule:"Emergency repairs within 24 hours",risk:"high",cat:"Repairs"},{id:"c5",rule:"Bond cannot exceed 4 weeks rent",risk:"medium",cat:"Bond"},{id:"c6",rule:"24 hours notice for non-emergency entry",risk:"high",cat:"Entry"}];
+
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+const DB={primary:"#D4A843",accent:"#3ABDA0",name:"PropAI",tagline:"Perth Property Intelligence"};
+const C={bg:"#0B0E16",surf:"#12151F",card:"#181C2A",card2:"#1E2235",text:"#EDF0FA",muted:"#6B7494",subtle:"#353A52",green:"#4CAF82",rose:"#E07070",orange:"#E09050",blue:"#5B8DEF",purple:"#9B7FE8"};
+
+// ── Plans ─────────────────────────────────────────────────────────────────────
+const PLANS=[
+  {id:"starter",name:"Starter",price:1200,color:"#3ABDA0",badge:null,props:"Up to 10 properties",desc:"Solo agents & small boutiques",
+   features:["AI inspection reports","Landlord & tenant portals","WA compliance checker","Rent tracking","Invite code system","Email previews","Email support"],
+   out:["Rent tracker","Inspection scheduler","White labelling","Team members"],priceId:"price_REPLACE_STARTER"},
+  {id:"growth",name:"Growth",price:2800,color:"#D4A843",badge:"Most popular",props:"Up to 25 properties",desc:"Independent PM agencies",
+   features:["Everything in Starter","White label — your brand","Rent tracker with arrears alerts","Inspection scheduler","Photo uploads","Team members (up to 3)","Notification system","Priority support"],
+   out:["Unlimited properties","Unlimited team members"],priceId:"price_REPLACE_GROWTH"},
+  {id:"scale",name:"Scale",price:5500,color:"#9B7FE8",badge:"Enterprise",props:"Unlimited properties",desc:"Mid-size agencies, 25+ properties",
+   features:["Everything in Growth","Unlimited properties","Unlimited team members","Custom onboarding call","Quarterly strategy review","Phone + priority support","Custom domain"],
+   out:[],priceId:"price_REPLACE_SCALE"},
+];
+
+// ── UI Primitives ─────────────────────────────────────────────────────────────
+function Spin({col}){return <div style={{width:14,height:14,border:`2px solid rgba(255,255,255,0.1)`,borderTopColor:col||C.muted,borderRadius:"50%",animation:"spin .65s linear infinite",flexShrink:0}}/>;}
+
+function Btn({onClick,disabled,loading,children,col,v="p",small,full,style:sx={}}){
+  const vs={
+    p:{background:col||DB.primary,color:"#0B0E16",border:"none"},
+    g:{background:"transparent",color:C.muted,border:`1px solid rgba(255,255,255,0.08)`},
+    gr:{background:"rgba(76,175,130,0.12)",color:C.green,border:`1px solid rgba(76,175,130,0.25)`},
+    ro:{background:"rgba(224,112,112,0.12)",color:C.rose,border:`1px solid rgba(224,112,112,0.25)`},
+    bl:{background:"rgba(91,141,239,0.12)",color:C.blue,border:`1px solid rgba(91,141,239,0.25)`},
+    pu:{background:"rgba(155,127,232,0.12)",color:C.purple,border:`1px solid rgba(155,127,232,0.25)`},
+    ol:{background:"transparent",color:col||DB.primary,border:`1px solid ${col||DB.primary}55`},
+  };
+  return <button onClick={!disabled&&!loading?onClick:undefined} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,padding:small?"5px 12px":"10px 20px",borderRadius:9,fontSize:small?11:13,fontWeight:500,fontFamily:"'Outfit',sans-serif",cursor:disabled||loading?"not-allowed":"pointer",opacity:disabled||loading?.5:1,transition:"all .15s",width:full?"100%":"auto",...(vs[v]||vs.p),...sx}}>{loading?<Spin col={(vs[v]||vs.p).color}/>:children}</button>;
+}
+
+const Card=({children,accent,style:sx={}})=><div style={{background:C.card,border:`1px solid ${accent||"rgba(255,255,255,0.07)"}`,borderRadius:14,...sx}}>{children}</div>;
+const Badge=({children,color="#D4A843"})=><span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:color+"22",color,fontWeight:600,letterSpacing:".04em",textTransform:"uppercase"}}>{children}</span>;
+const Avatar=({name="?",color="#D4A843",size=30})=>{const i=name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{width:size,height:size,borderRadius:"50%",background:color+"22",border:`1px solid ${color}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*.35,fontWeight:600,color,flexShrink:0}}>{i}</div>;};
+const Stat=({label,value,color="#D4A843",sub})=><div style={{background:C.card2,borderRadius:10,padding:"13px 15px",flex:1}}><div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",marginBottom:4}}>{label}</div><div style={{fontSize:21,fontFamily:"'Playfair Display',serif",color}}>{value}</div>{sub&&<div style={{fontSize:11,color:C.muted,marginTop:1}}>{sub}</div>}</div>;
+const Lbl=({children})=><div style={{fontSize:11,color:C.muted,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",marginBottom:5}}>{children}</div>;
+const Field=({label,children,style:sx={}})=><div style={{marginBottom:12,...sx}}><Lbl>{label}</Lbl>{children}</div>;
+const Notice=({children,color="#5B8DEF",style:sx={}})=><div style={{padding:"10px 13px",background:color+"18",border:`1px solid ${color}33`,borderRadius:8,fontSize:12,color,lineHeight:1.6,marginBottom:12,...sx}}>{children}</div>;
+const Out=({text,loading})=>(!text&&!loading)?null:<div style={{background:C.bg,border:`1px solid rgba(255,255,255,0.07)`,borderRadius:8,padding:"12px 14px",fontSize:12,lineHeight:1.85,color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word",minHeight:56}}>{loading?<div style={{display:"flex",alignItems:"center",gap:8,color:C.muted}}><Spin/><span>Generating…</span></div>:text}</div>;
+const Bubble=({msg,isMe,color})=><div style={{display:"flex",flexDirection:"column",alignItems:isMe?"flex-end":"flex-start",marginBottom:9}}><div style={{maxWidth:"85%",background:isMe?color+"20":C.card2,border:`1px solid ${isMe?color+"40":"rgba(255,255,255,0.07)"}`,borderRadius:10,padding:"9px 13px",fontSize:12,lineHeight:1.75,color:C.text,whiteSpace:"pre-wrap"}}>{msg.content}</div><div style={{fontSize:10,color:C.muted,marginTop:2}}>{isMe?"You":msg.from==="pm"?"PM":msg.from} · {msg.date}</div></div>;
+
+function PhotoUp({photos=[],onAdd,onRemove}){
+  const ref=useRef();
+  const handle=e=>{Array.from(e.target.files).forEach(f=>{const r=new FileReader();r.onload=ev=>onAdd({id:"ph"+Date.now()+Math.random(),data:ev.target.result,name:f.name});r.readAsDataURL(f);});e.target.value="";};
+  return(<div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+    {photos.map(ph=><div key={ph.id} style={{position:"relative",width:68,height:68,borderRadius:8,overflow:"hidden",border:`1px solid rgba(255,255,255,0.07)`}}><img src={ph.data} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/><button onClick={()=>onRemove(ph.id)} style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,.8)",border:"none",borderRadius:"50%",width:17,height:17,color:"#fff",cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button></div>)}
+    <button onClick={()=>ref.current.click()} style={{width:68,height:68,borderRadius:8,border:`1.5px dashed rgba(255,255,255,0.1)`,background:"transparent",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,color:C.muted,fontSize:10,fontFamily:"inherit"}}><span style={{fontSize:18}}>+</span>Photo</button>
+    <input ref={ref} type="file" accept="image/*" multiple onChange={handle} style={{display:"none"}}/>
+  </div>);
+}
+
+const MS={pending:{l:"Pending",c:C.orange},approved:{l:"Sent to landlord",c:C.blue},landlord_approved:{l:"Approved",c:C.green},landlord_declined:{l:"Declined",c:C.rose},completed:{l:"Done",c:"#3ABDA0"}};
+
+function genNotifs(data){
+  const n=[];
+  (data.properties||[]).forEach(p=>{
+    if(p.leaseEnd&&!p.vacant){const d=Math.round((new Date(p.leaseEnd.split(" ").reverse().join("-"))-new Date())/864e5);if(d<=90&&d>0)n.push({id:"nl"+p.id,color:C.orange,title:"Lease expiring",body:`${p.address.split(",")[0]} · ${d} days`});}
+    if(p.vacant)n.push({id:"nv"+p.id,color:C.rose,title:"Vacant",body:p.address.split(",")[0]});
+  });
+  (data.rentLedger||[]).filter(r=>r.status==="outstanding").forEach(r=>n.push({id:"nr"+r.id,color:C.rose,title:"Rent outstanding",body:r.period}));
+  (data.maintenance||[]).filter(m=>m.status==="pending").forEach(m=>n.push({id:"nm"+m.id,color:C.orange,title:"Maintenance pending",body:m.description?.slice(0,40)}));
+  return n;
+}
+
+function Bell({data,color}){
+  const [open,setOpen]=useState(false);const notifs=genNotifs(data);
+  return(<div style={{position:"relative"}}>
+    <button onClick={()=>setOpen(p=>!p)} style={{width:34,height:34,borderRadius:8,border:`1px solid rgba(255,255,255,0.07)`,background:C.card2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+      🔔
+      {notifs.length>0&&<div style={{position:"absolute",top:-4,right:-4,width:16,height:16,borderRadius:"50%",background:C.rose,fontSize:9,fontWeight:700,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}>{notifs.length}</div>}
+    </button>
+    {open&&<div className="slide" style={{position:"absolute",top:42,right:0,width:280,background:C.card,border:`1px solid rgba(255,255,255,0.07)`,borderRadius:12,zIndex:200,maxHeight:300,overflowY:"auto"}}>
+      <div style={{padding:"10px 14px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,fontWeight:500}}>Notifications</div>
+      {!notifs.length&&<div style={{padding:"20px",textAlign:"center",fontSize:12,color:C.muted}}>All clear ✓</div>}
+      {notifs.map(n=><div key={n.id} style={{padding:"9px 14px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",gap:9}}><div style={{width:7,height:7,borderRadius:"50%",background:n.color,flexShrink:0,marginTop:4}}/><div><div style={{fontSize:12,fontWeight:500,color:C.text}}>{n.title}</div><div style={{fontSize:11,color:C.muted}}>{n.body}</div></div></div>)}
+    </div>}
+  </div>);
+}
+
+function Sidebar({tabs,active,setTab,user,color}){
+  return(<aside style={{width:205,minWidth:205,background:C.surf,borderRight:`1px solid rgba(255,255,255,0.07)`,display:"flex",flexDirection:"column",position:"sticky",top:0,height:"100vh",overflowY:"auto"}}>
+    <div style={{padding:"18px 16px 14px",borderBottom:`1px solid rgba(255,255,255,0.07)`}}>
+      {user.logo?<img src={user.logo} alt="logo" style={{height:24,objectFit:"contain",marginBottom:4}}/>:<div style={{fontFamily:"'Playfair Display',serif",fontSize:18,color:C.text,marginBottom:2}}>{user.brandName||"PropAI"}</div>}
+      <div style={{fontSize:10,color:C.muted,marginBottom:5}}>{user.tagline||""}</div>
+      <Badge color={color}>{user.roleLabel}</Badge>
+    </div>
+    <nav style={{padding:"10px 9px",flex:1}}>
+      {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",textAlign:"left",padding:"8px 11px",borderRadius:8,border:"none",background:active===t.id?color+"1E":"transparent",color:active===t.id?color:C.muted,fontSize:13,fontWeight:active===t.id?500:400,cursor:"pointer",fontFamily:"inherit",marginBottom:2,transition:"all .15s"}}><span>{t.label}</span>{t.badge>0&&<span style={{fontSize:10,background:color+"33",color,borderRadius:10,padding:"1px 6px",fontWeight:600}}>{t.badge}</span>}</button>)}
+    </nav>
+    <div style={{padding:"10px",borderTop:`1px solid rgba(255,255,255,0.07)`}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 9px",borderRadius:8,background:"rgba(255,255,255,0.03)"}}>
+        <Avatar name={user.name} color={color} size={26}/>
+        <div style={{minWidth:0}}><div style={{fontSize:12,color:C.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</div><div style={{fontSize:10,color:C.muted}}>{user.sub}</div></div>
+      </div>
+    </div>
+  </aside>);
+}
+
+function TopBar({title,sub,right,data,color}){
+  return(<div style={{padding:"13px 22px",borderBottom:`1px solid rgba(255,255,255,0.07)`,background:C.surf,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
+    <div><div style={{fontFamily:"'Playfair Display',serif",fontSize:17,color:C.text}}>{title}</div>{sub&&<div style={{fontSize:11,color:C.muted,marginTop:1}}>{sub}</div>}</div>
+    <div style={{display:"flex",alignItems:"center",gap:8}}>{data&&<Bell data={data} color={color}/>}{right}</div>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRICING PAGE
+// ══════════════════════════════════════════════════════════════════════════════
+function PricingPage({onSelectPlan,onLogin}){
+  const [billing,setBilling]=useState("monthly");
+  return(<div style={{minHeight:"100vh",background:C.bg}}>
+    <nav style={{padding:"16px 40px",borderBottom:`1px solid rgba(255,255,255,0.06)`,display:"flex",alignItems:"center",justifyContent:"space-between",background:C.surf}}>
+      <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.text}}>PropAI</div>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <span style={{fontSize:13,color:C.muted}}>Already have an account?</span>
+        <Btn v="ol" col={DB.primary} onClick={onLogin} style={{padding:"7px 18px",fontSize:13}}>Sign in</Btn>
+      </div>
+    </nav>
+    <div style={{maxWidth:1060,margin:"0 auto",padding:"56px 24px"}}>
+      <div style={{textAlign:"center",marginBottom:52}}>
+        <div style={{display:"inline-block",fontSize:11,padding:"4px 14px",borderRadius:20,background:DB.primary+"22",color:DB.primary,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",marginBottom:16}}>Perth Property Intelligence Platform</div>
+        <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:44,fontWeight:700,color:C.text,marginBottom:14,lineHeight:1.15}}>The complete platform for<br/>Perth property management</h1>
+        <p style={{fontSize:15,color:C.muted,maxWidth:520,margin:"0 auto",lineHeight:1.7}}>AI inspection reports, connected landlord and tenant portals, WA compliance built in. White labelled as your own agency.</p>
+        <div style={{display:"flex",justifyContent:"center",gap:24,marginTop:24,flexWrap:"wrap"}}>
+          {[["◆","WA Tenancy Act compliant"],["◈","30-day money back"],["◉","No lock-in contracts"],["✦","Cancel anytime"]].map(([icon,text])=><div key={text} style={{display:"flex",alignItems:"center",gap:6,fontSize:13,color:C.muted}}><span style={{color:DB.primary,fontSize:11}}>{icon}</span>{text}</div>)}
+        </div>
+      </div>
+      <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:12,marginBottom:36}}>
+        <span style={{fontSize:14,color:billing==="monthly"?C.text:C.muted}}>Monthly</span>
+        <button onClick={()=>setBilling(b=>b==="monthly"?"annual":"monthly")} style={{width:44,height:24,borderRadius:12,border:"none",background:billing==="annual"?DB.primary:C.subtle,cursor:"pointer",position:"relative",transition:"background .2s"}}><div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:3,left:billing==="annual"?23:3,transition:"left .2s"}}/></button>
+        <span style={{fontSize:14,color:billing==="annual"?C.text:C.muted}}>Annual</span>
+        {billing==="annual"&&<span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:C.green+"22",color:C.green,fontWeight:600}}>Save 20%</span>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:56}}>
+        {PLANS.map(plan=>{
+          const price=billing==="annual"?Math.round(plan.price*.8):plan.price;
+          return(<div key={plan.id} style={{background:C.card,border:`${plan.id==="growth"?"2px":"1px"} solid ${plan.id==="growth"?plan.color+"55":"rgba(255,255,255,0.08)"}`,borderRadius:18,overflow:"hidden",position:"relative"}}>
+            {plan.badge&&<div style={{position:"absolute",top:14,right:14,fontSize:10,padding:"3px 10px",borderRadius:20,background:plan.color+"22",color:plan.color,fontWeight:600,textTransform:"uppercase"}}>{plan.badge}</div>}
+            <div style={{padding:"26px 24px 20px"}}>
+              <div style={{fontSize:11,color:plan.color,fontWeight:600,letterSpacing:".1em",textTransform:"uppercase",marginBottom:6}}>{plan.name}</div>
+              <div style={{display:"flex",alignItems:"flex-end",gap:3,marginBottom:4}}><span style={{fontFamily:"'Playfair Display',serif",fontSize:38,fontWeight:700,color:C.text}}>${price.toLocaleString()}</span><span style={{fontSize:13,color:C.muted,marginBottom:7}}>/mo</span></div>
+              <div style={{fontSize:12,color:plan.color,fontWeight:500,marginBottom:6}}>{plan.props}</div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:18,lineHeight:1.5}}>{plan.desc}</div>
+              <Btn full col={plan.color} onClick={()=>onSelectPlan(plan,billing)}>Get started</Btn>
+            </div>
+            <div style={{padding:"0 24px 24px"}}>
+              <div style={{height:1,background:"rgba(255,255,255,0.06)",marginBottom:14}}/>
+              {plan.features.map(f=><div key={f} style={{display:"flex",gap:7,marginBottom:7}}><span style={{color:plan.color,fontSize:13,flexShrink:0}}>✓</span><span style={{fontSize:12,color:C.text,lineHeight:1.5}}>{f}</span></div>)}
+              {plan.out.map(f=><div key={f} style={{display:"flex",gap:7,marginBottom:7,opacity:.35}}><span style={{color:C.muted,fontSize:13,flexShrink:0}}>✗</span><span style={{fontSize:12,color:C.muted}}>{f}</span></div>)}
+            </div>
+          </div>);
+        })}
+      </div>
+      <div style={{maxWidth:620,margin:"0 auto 52px"}}>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.text,textAlign:"center",marginBottom:28}}>Common questions</div>
+        {[["Is there a lock-in contract?","No. Month-to-month, cancel anytime. Annual plans are paid upfront."],["Can I use my own agency branding?","Yes — Growth and Scale plans include full white labelling. Your clients see your logo and colours."],["Do landlords and tenants pay separately?","No. One flat fee covers your whole portfolio — their portals are included."],["Is it compliant with WA tenancy law?","Yes. Built around the WA Residential Tenancies Act 1987 and 2023-2024 reforms."],["What happens to my data if I cancel?","30 days to export all your data after cancellation."]].map(([q,a])=><details key={q} style={{borderBottom:`1px solid rgba(255,255,255,0.07)`,paddingBottom:14,marginBottom:14}}><summary style={{fontSize:14,fontWeight:500,color:C.text,padding:"4px 0",userSelect:"none"}}>{q}</summary><div style={{fontSize:13,color:C.muted,lineHeight:1.75,marginTop:8}}>{a}</div></details>)}
+      </div>
+      <div style={{textAlign:"center",padding:"44px 24px",background:C.card,borderRadius:18,border:`1px solid rgba(255,255,255,0.07)`}}>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.text,marginBottom:10}}>Ready to get started?</div>
+        <div style={{fontSize:14,color:C.muted,marginBottom:22,lineHeight:1.7}}>Join Perth property managers saving 10+ hours a week.<br/>30-day money back guarantee — no questions asked.</div>
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <Btn col={DB.primary} onClick={()=>onSelectPlan(PLANS[1],"monthly")} style={{padding:"12px 28px",fontSize:14}}>Start with Growth — $2,800/mo</Btn>
+          <Btn v="g" onClick={()=>window.open("mailto:hello@propai.com.au","_blank")} style={{padding:"12px 20px",fontSize:14}}>Book a demo</Btn>
+        </div>
+      </div>
+    </div>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHECKOUT
+// ══════════════════════════════════════════════════════════════════════════════
+function CheckoutPage({plan,billing,onBack,onSuccess}){
+  const [form,setForm]=useState({agencyName:"",pmName:"",email:"",phone:""});
+  const [agreed,setAgreed]=useState(false);const [loading,setLoading]=useState(false);const [error,setError]=useState("");
+  const price=billing==="annual"?Math.round(plan.price*.8):plan.price;
+  const upd=k=>e=>setForm(p=>({...p,[k]:e.target.value}));
+  const proceed=()=>{
+    if(!form.agencyName||!form.pmName||!form.email){setError("Please fill all required fields.");return;}
+    if(!agreed){setError("Please accept the Terms of Service and Client Agreement.");return;}
+    setLoading(true);setError("");
+    // Stripe: call your Supabase Edge Function here
+    // fetch("https://yourproject.supabase.co/functions/v1/create-checkout",{method:"POST",...})
+    setTimeout(()=>{setLoading(false);onSuccess({...form,plan:plan.id,billing,price});},1800);
+  };
+  return(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+    <div style={{width:"100%",maxWidth:820,display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+      <div>
+        <button onClick={onBack} style={{background:"none",border:"none",color:C.muted,fontSize:13,cursor:"pointer",fontFamily:"inherit",marginBottom:24,display:"flex",alignItems:"center",gap:5}}>← Back to plans</button>
+        <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.text,marginBottom:4}}>PropAI</div>
+        <div style={{fontSize:13,color:C.muted,marginBottom:28}}>Perth Property Intelligence Platform</div>
+        <Card style={{border:`1px solid ${plan.color}44`,padding:22,marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+            <div><div style={{fontSize:11,color:plan.color,fontWeight:600,textTransform:"uppercase",letterSpacing:".1em",marginBottom:3}}>{plan.name} plan</div><div style={{fontSize:12,color:C.muted}}>{plan.props}</div></div>
+            <div style={{textAlign:"right"}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.text}}>${price.toLocaleString()}</div><div style={{fontSize:11,color:C.muted}}>per month{billing==="annual"?" · billed annually":""}</div></div>
+          </div>
+          <div style={{height:1,background:"rgba(255,255,255,0.07)",marginBottom:12}}/>
+          {plan.features.slice(0,5).map(f=><div key={f} style={{display:"flex",gap:7,marginBottom:6}}><span style={{color:plan.color,fontSize:12}}>✓</span><span style={{fontSize:12,color:C.text}}>{f}</span></div>)}
+        </Card>
+        <Notice color={DB.primary}>30-day money back guarantee — no questions asked.</Notice>
+      </div>
+      <Card style={{padding:26}}>
+        <div style={{fontSize:15,fontWeight:500,color:C.text,marginBottom:18}}>Your details</div>
+        <Field label="Agency name *"><input type="text" value={form.agencyName} onChange={upd("agencyName")} placeholder="Sorrento Property Group"/></Field>
+        <Field label="Your name *"><input type="text" value={form.pmName} onChange={upd("pmName")} placeholder="Sarah Williams"/></Field>
+        <Field label="Email address *"><input type="email" value={form.email} onChange={upd("email")} placeholder="you@agency.com.au"/></Field>
+        <Field label="Phone (optional)"><input type="text" value={form.phone} onChange={upd("phone")} placeholder="08 9XXX XXXX"/></Field>
+        <div style={{height:1,background:"rgba(255,255,255,0.07)",marginBottom:16}}/>
+        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:16,cursor:"pointer"}} onClick={()=>setAgreed(p=>!p)}>
+          <div style={{width:18,height:18,borderRadius:5,border:`2px solid ${agreed?DB.primary:"rgba(255,255,255,0.2)"}`,background:agreed?DB.primary+"1E":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>
+            {agreed&&<span style={{color:DB.primary,fontSize:12,fontWeight:700}}>✓</span>}
+          </div>
+          <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>I agree to the Terms of Service and Client Agreement. I understand PropAI is licensed software, not sold.</div>
+        </div>
+        {error&&<div style={{fontSize:12,color:C.rose,marginBottom:12,padding:"9px 12px",background:C.rose+"12",borderRadius:8}}>{error}</div>}
+        <Btn full col={plan.color} onClick={proceed} loading={loading}>{loading?"Processing…":`Continue to payment — $${price.toLocaleString()}/mo`}</Btn>
+        <div style={{marginTop:10,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:11,color:C.subtle}}>🔒 Secured by Stripe</div>
+      </Card>
+    </div>
+  </div>);
+}
+
+function SuccessPage({details,onEnterApp}){
+  const plan=PLANS.find(p=>p.id===details?.plan)||PLANS[1];
+  return(<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+    <div style={{maxWidth:500,textAlign:"center"}}>
+      <div style={{width:68,height:68,borderRadius:"50%",background:C.green+"20",border:`2px solid ${C.green}44`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 22px",fontSize:30}}>✓</div>
+      <div style={{fontFamily:"'Playfair Display',serif",fontSize:28,color:C.text,marginBottom:8}}>Welcome to PropAI</div>
+      <div style={{fontSize:14,color:C.muted,marginBottom:28,lineHeight:1.7}}>Payment confirmed. You're on the <span style={{color:plan.color,fontWeight:500}}>{plan.name} plan</span>.<br/>We'll be in touch at <span style={{color:C.text}}>{details.email}</span> within 24 hours.</div>
+      <Card style={{padding:22,marginBottom:24,textAlign:"left"}}>
+        <div style={{fontSize:13,fontWeight:500,color:C.text,marginBottom:12}}>What happens next</div>
+        {[["Within 24hrs","Setup call from your PropAI account manager"],["Day 1","Agency branding, colours, and logo configured"],["Day 1–2","Properties added, invite codes sent to landlords and tenants"],["Day 2","You're live — first AI inspection report ready to send"]].map(([t,a])=><div key={t} style={{display:"flex",gap:12,marginBottom:10}}><div style={{width:80,flexShrink:0,fontSize:11,color:plan.color,fontWeight:600,paddingTop:1}}>{t}</div><div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{a}</div></div>)}
+      </Card>
+      <Btn full col={plan.color} onClick={onEnterApp} style={{padding:"12px",fontSize:14}}>Enter PropAI now</Btn>
+    </div>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// APP WELCOME / LOGIN
+// ══════════════════════════════════════════════════════════════════════════════
+function AppWelcome({onChoice,brand}){
+  const p=brand?.primary||DB.primary;
+  return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+    <div style={{marginBottom:6}}>{brand?.logoUrl?<img src={brand.logoUrl} alt="logo" style={{height:42,objectFit:"contain"}}/>:<div style={{fontFamily:"'Playfair Display',serif",fontSize:38,fontWeight:700,color:C.text}}>{brand?.name||"PropAI"}</div>}</div>
+    <div style={{fontSize:11,color:C.muted,letterSpacing:".1em",textTransform:"uppercase",marginBottom:9}}>{brand?.tagline||"Perth Property Intelligence"}</div>
+    <div style={{fontSize:13,color:C.muted,marginBottom:44,textAlign:"center",maxWidth:320,lineHeight:1.7}}>The complete platform for property managers, landlords, and tenants.</div>
+    <div style={{display:"flex",flexDirection:"column",gap:9,width:"100%",maxWidth:380}}>
+      <button onClick={()=>onChoice("pm-signup")} style={{background:p+"1E",border:`1px solid ${p}40`,borderRadius:13,padding:"18px 22px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}><div style={{fontSize:15,fontWeight:600,color:p,marginBottom:3}}>I'm a property manager</div><div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>Set up your agency, add properties, invite landlords & tenants</div></button>
+      <button onClick={()=>onChoice("enter-code")} style={{background:C.card,border:`1px solid rgba(255,255,255,0.07)`,borderRadius:13,padding:"18px 22px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}><div style={{fontSize:15,fontWeight:600,color:C.text,marginBottom:3}}>I have an invite code</div><div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>Enter the code your property manager sent you</div></button>
+      <button onClick={()=>onChoice("pm-login")} style={{background:"transparent",border:`1px solid rgba(255,255,255,0.07)`,borderRadius:13,padding:"12px 22px",cursor:"pointer",textAlign:"center",fontFamily:"inherit"}}><div style={{fontSize:13,color:C.muted}}>Property manager — sign back in</div></button>
+    </div>
+  </div>);
+}
+
+function PMSignup({onComplete}){
+  const [f,setF]=useState({name:"",pmName:"",email:"",phone:"",pin:""});const [err,setErr]=useState("");
+  const upd=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const submit=()=>{if(!f.name||!f.pmName||!f.pin||f.pin.length<4){setErr("Fill all fields. PIN 4+ digits.");return;}onComplete({agency:{...f,id:"ag"+Date.now(),brand:{...DB}},properties:[],inspections:[],messages:[],maintenance:[],rentLedger:[],scheduledInspections:[],inviteCodes:{}});};
+  return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}><div style={{width:"100%",maxWidth:420}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.text,marginBottom:22}}>Set up your agency</div><Card style={{padding:22}}><Field label="Agency name"><input type="text" value={f.name} onChange={upd("name")} placeholder="Sorrento Property Group"/></Field><Field label="Your name"><input type="text" value={f.pmName} onChange={upd("pmName")} placeholder="Sarah Williams"/></Field><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}><Field label="Email"><input type="text" value={f.email} onChange={upd("email")} placeholder="you@agency.com.au"/></Field><Field label="Phone"><input type="text" value={f.phone} onChange={upd("phone")} placeholder="08 9XXX XXXX"/></Field></div><Field label="Create PM PIN"><input type="password" value={f.pin} onChange={upd("pin")} placeholder="4+ digit PIN" maxLength={8}/></Field>{err&&<div style={{fontSize:12,color:C.rose,marginBottom:11}}>{err}</div>}<Btn full onClick={submit}>Create agency & continue</Btn></Card></div></div>);
+}
+
+function PMLogin({saved,onLogin,onBack}){
+  const [pin,setPin]=useState("");const [err,setErr]=useState("");
+  return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}><div style={{width:"100%",maxWidth:340}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.text,marginBottom:3}}>Welcome back</div><div style={{fontSize:13,color:C.muted,marginBottom:22}}>{saved.agency.name}</div><Card style={{padding:22}}><Field label="Your PIN"><input type="password" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(pin===saved.agency.pin?onLogin():setErr("Incorrect PIN."))} placeholder="Enter your PM PIN"/></Field>{err&&<div style={{fontSize:12,color:C.rose,marginBottom:11}}>{err}</div>}<Btn full onClick={()=>pin===saved.agency.pin?onLogin():setErr("Incorrect PIN.")}>Sign in</Btn><button onClick={onBack} style={{marginTop:11,background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",width:"100%",textAlign:"center"}}>Back</button></Card></div></div>);
+}
+
+function CodeLogin({saved,onLogin,onBack}){
+  const [code,setCode]=useState("");const [err,setErr]=useState("");
+  const attempt=()=>{const u=code.trim().toUpperCase();const c=saved?.inviteCodes||{};if(c[u])onLogin(c[u]);else setErr("Code not found. Check with your property manager.");};
+  return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}><div style={{width:"100%",maxWidth:360}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.text,marginBottom:22}}>Enter your invite code</div><Card style={{padding:22}}><Field label="Invite code"><input type="text" value={code} onChange={e=>setCode(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&attempt()} placeholder="e.g. LL-A3B4" style={{textTransform:"uppercase",letterSpacing:".1em",fontWeight:600,fontSize:16}}/></Field>{err&&<div style={{fontSize:12,color:C.rose,marginBottom:11}}>{err}</div>}<Btn full onClick={attempt}>Access my portal</Btn><button onClick={onBack} style={{marginTop:11,background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",width:"100%",textAlign:"center"}}>Back</button></Card></div></div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADD PROPERTY FLOW
+// ══════════════════════════════════════════════════════════════════════════════
+function AddProp({data,setData,toast,onDone}){
+  const [step,setStep]=useState(1);const [p,setP]=useState({address:"",type:"house",beds:"3",baths:"2",landlordName:"",landlordEmail:"",tenantName:"",tenantEmail:"",rent:"",bond:"",leaseStart:"",leaseEnd:"",vacant:false});const [saving,setSaving]=useState(false);const [last,setLast]=useState(null);
+  const brand=data.agency?.brand||DB;const color=brand.primary||DB.primary;const accent=brand.accent||DB.accent;
+  const save_=()=>{setSaving(true);const propId="p"+Date.now();const llCode=makeCode("LL");const tnCode=p.vacant||!p.tenantName?null:makeCode("TN");const newProp={id:propId,address:p.address,type:p.type,beds:parseInt(p.beds)||3,baths:parseInt(p.baths)||2,landlord:p.landlordName,landlordEmail:p.landlordEmail,tenant:p.tenantName||"",tenantEmail:p.tenantEmail||"",rent:parseInt(p.rent)||0,bond:parseInt(p.bond)||0,leaseStart:p.leaseStart,leaseEnd:p.leaseEnd,vacant:p.vacant||!p.tenantName,healthScore:0,landlordCode:llCode,tenantCode:tnCode};const codes={...(data.inviteCodes||{}),[llCode]:{role:"landlord",propId,name:p.landlordName}};if(tnCode)codes[tnCode]={role:"tenant",propId,name:p.tenantName};const updated={...data,properties:[...data.properties,newProp],inviteCodes:codes};setData(updated);persist(updated);setLast(newProp);setSaving(false);setStep(3);toast("Property added!");};
+  if(step===3&&last)return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}><div style={{width:"100%",maxWidth:480}}><div style={{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.text,marginBottom:3}}>Property added ✓</div><div style={{fontSize:13,color:C.muted,marginBottom:20}}>{last.address}</div><div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:20}}>{[{code:last.landlordCode,name:last.landlord,color:accent,role:"Landlord"},{code:last.tenantCode,name:last.tenant,color:C.purple,role:"Tenant"}].filter(x=>x.code).map(x=><Card key={x.role} accent={x.color+"44"} style={{padding:17}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{x.role} invite</div><div style={{fontSize:12,color:C.muted}}>{x.name}</div></div><Badge color={x.color}>{x.role}</Badge></div><div style={{background:C.bg,borderRadius:8,padding:"10px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}}><div style={{fontFamily:"monospace",fontSize:20,fontWeight:700,color:x.color,letterSpacing:".15em"}}>{x.code}</div><button onClick={()=>navigator.clipboard.writeText(x.code)} style={{padding:"5px 10px",borderRadius:7,background:x.color+"1E",border:`1px solid ${x.color}40`,color:x.color,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Copy</button></div><div style={{fontSize:11,color:C.muted,marginTop:7}}>Share with {x.name} — they enter this at the login screen.</div></Card>)}</div><div style={{display:"flex",gap:9}}><button onClick={()=>{setP({address:"",type:"house",beds:"3",baths:"2",landlordName:"",landlordEmail:"",tenantName:"",tenantEmail:"",rent:"",bond:"",leaseStart:"",leaseEnd:"",vacant:false});setStep(1);}} style={{flex:1,padding:"9px",borderRadius:8,background:C.surf,border:`1px solid rgba(255,255,255,0.12)`,color:C.text,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>Add another</button><Btn full col={color} onClick={onDone}>Go to dashboard</Btn></div></div></div>);
+  return(<div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}><div style={{width:"100%",maxWidth:480}}>
+    <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:20}}>{[1,2].map(s=><div key={s} style={{display:"flex",alignItems:"center",gap:7}}><div style={{width:24,height:24,borderRadius:"50%",background:step>=s?color:"#353A52",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:step>=s?"#0B0E16":C.muted}}>{s}</div><span style={{fontSize:12,color:step>=s?C.text:C.muted}}>{s===1?"Property details":"People & tenancy"}</span>{s<2&&<div style={{width:18,height:1,background:"#353A52"}}/>}</div>)}</div>
+    <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.text,marginBottom:16}}>{step===1?"Property details":"Landlord & tenant"}</div>
+    {step===1&&<Card style={{padding:20}}><Field label="Full address"><input type="text" value={p.address} onChange={e=>setP(v=>({...v,address:e.target.value}))} placeholder="14 Banksia Tce, Mount Lawley WA 6050"/></Field><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9}}><Field label="Type"><select value={p.type} onChange={e=>setP(v=>({...v,type:e.target.value}))}>{["house","apartment","townhouse","villa","duplex"].map(t=><option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}</select></Field><Field label="Bedrooms"><input type="text" value={p.beds} onChange={e=>setP(v=>({...v,beds:e.target.value}))} placeholder="3"/></Field><Field label="Bathrooms"><input type="text" value={p.baths} onChange={e=>setP(v=>({...v,baths:e.target.value}))} placeholder="2"/></Field></div><div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",background:C.card2,borderRadius:8,marginBottom:16,cursor:"pointer"}} onClick={()=>setP(v=>({...v,vacant:!v.vacant}))}><div style={{width:15,height:15,borderRadius:4,border:`2px solid ${p.vacant?color:"#353A52"}`,background:p.vacant?color+"1E":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{p.vacant&&<div style={{width:6,height:6,borderRadius:2,background:color}}/>}</div><span style={{fontSize:13,color:C.text}}>Currently vacant</span></div><Btn full col={color} onClick={()=>p.address&&setStep(2)} disabled={!p.address}>Next</Btn></Card>}
+    {step===2&&<Card style={{padding:20}}><div style={{fontSize:11,color:accent,fontWeight:600,marginBottom:9,textTransform:"uppercase",letterSpacing:".08em"}}>Landlord</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}><Field label="Full name"><input type="text" value={p.landlordName} onChange={e=>setP(v=>({...v,landlordName:e.target.value}))} placeholder="Michael Thornton"/></Field><Field label="Email"><input type="text" value={p.landlordEmail} onChange={e=>setP(v=>({...v,landlordEmail:e.target.value}))} placeholder="michael@email.com"/></Field></div>{!p.vacant&&<><div style={{height:1,background:"rgba(255,255,255,0.07)",marginBottom:12}}/><div style={{fontSize:11,color:C.purple,fontWeight:600,marginBottom:9,textTransform:"uppercase",letterSpacing:".08em"}}>Tenant</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:12}}><Field label="Full name"><input type="text" value={p.tenantName} onChange={e=>setP(v=>({...v,tenantName:e.target.value}))} placeholder="Sarah & James Chen"/></Field><Field label="Email"><input type="text" value={p.tenantEmail} onChange={e=>setP(v=>({...v,tenantEmail:e.target.value}))} placeholder="sarah@email.com"/></Field></div></>}<div style={{height:1,background:"rgba(255,255,255,0.07)",marginBottom:12}}/><div style={{fontSize:11,color,fontWeight:600,marginBottom:9,textTransform:"uppercase",letterSpacing:".08em"}}>Tenancy</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:16}}><Field label="Weekly rent ($)"><input type="number" value={p.rent} onChange={e=>setP(v=>({...v,rent:e.target.value}))} placeholder="720"/></Field><Field label="Bond ($)"><input type="number" value={p.bond} onChange={e=>setP(v=>({...v,bond:e.target.value}))} placeholder="2880"/></Field><Field label="Lease start"><input type="text" value={p.leaseStart} onChange={e=>setP(v=>({...v,leaseStart:e.target.value}))} placeholder="1 Oct 2024"/></Field><Field label="Lease end"><input type="text" value={p.leaseEnd} onChange={e=>setP(v=>({...v,leaseEnd:e.target.value}))} placeholder="30 Sep 2026"/></Field></div><div style={{display:"flex",gap:9}}><Btn v="g" onClick={()=>setStep(1)}>Back</Btn><Btn full loading={saving} col={color} onClick={save_} disabled={!p.landlordName}>Add property & generate codes</Btn></div></Card>}
+  </div></div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PM PORTAL
+// ══════════════════════════════════════════════════════════════════════════════
+function PropMap({properties}){
+  const [sel,setSel]=useState(properties[0]?.id||null);
+  const p=properties.find(x=>x.id===sel)||properties[0];
+  if(!properties.length)return<div style={{textAlign:"center",padding:"40px",color:C.muted}}>No properties yet.</div>;
+  return(<div className="fade">
+    <div style={{display:"flex",gap:7,marginBottom:13,flexWrap:"wrap"}}>{properties.map(x=><button key={x.id} onClick={()=>setSel(x.id)} style={{padding:"6px 13px",borderRadius:8,border:`1px solid ${sel===x.id?DB.primary+"66":"rgba(255,255,255,0.07)"}`,background:sel===x.id?DB.primary+"1E":"transparent",color:sel===x.id?DB.primary:C.muted,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>{x.address.split(",")[0]}</button>)}</div>
+    {p&&<><Card style={{marginBottom:11,padding:"13px 17px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{p.address}</div><div style={{fontSize:12,color:C.muted,marginTop:2}}>{p.type} · {p.beds}bd {p.baths}ba · {p.vacant?"Vacant":p.tenant}</div></div><div style={{display:"flex",gap:6}}><Btn small v="bl" onClick={()=>window.open(`https://www.google.com/maps/search/${encodeURIComponent(p.address+", Western Australia")}`,"_blank")}>Open Maps</Btn><Btn small v="g" onClick={()=>window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(p.address+", Western Australia")}`,"_blank")}>Directions</Btn></div></div></Card>
+    <div style={{borderRadius:12,overflow:"hidden",border:`1px solid rgba(255,255,255,0.07)`,marginBottom:11}}><iframe width="100%" height="360" frameBorder="0" style={{borderRadius:12,display:"block"}} allowFullScreen loading="lazy" src={`https://maps.google.com/maps?q=${encodeURIComponent(p.address+", Western Australia, Australia")}&output=embed&z=16`} title="map"/></div>
+    <div style={{padding:"11px 14px",background:DB.primary+"10",border:`1px solid ${DB.primary}22`,borderRadius:10,fontSize:12,color:C.muted}}>Perth: Median {PERTH_MARKET.med} · Growth {PERTH_MARKET.growth} · Vacancy {PERTH_MARKET.v} · Rents {PERTH_MARKET.rents}</div></>}
+  </div>);
+}
+
+function ComplianceTab({data}){
+  const [out,setOut]=useState("");const [loading,setLoading]=useState(false);const [active,setActive]=useState(null);const [advice,setAdvice]=useState({});
+  const getAdv=async(r)=>{if(advice[r.id]){setActive(r.id);return;}setActive(r.id);setLoading(true);try{const a=await ai(`WA tenancy law expert. Practical guidance for Perth PMs. WA Residential Tenancies Act 1987+2023-2024. Be specific and brief.`,`Rule: ${r.rule}
+Category: ${r.cat}
+Portfolio: ${(data.properties||[]).length} properties. What do I need to do?`);setAdvice(p=>({...p,[r.id]:a}));}catch(e){setAdvice(p=>({...p,[r.id]:"Error: "+e.message}));}setLoading(false);};
+  const audit=async()=>{setLoading(true);try{const a=await ai(`WA tenancy compliance auditor. Brief health check for Perth PM. WA Residential Tenancies Act 2023-2024.`,`Agency: ${data.agency?.name}
+Properties: ${(data.properties||[]).length}
+Maintenance pending: ${(data.maintenance||[]).filter(m=>m.status==="pending").length}
+Provide: compliance rating, top 3 risks, immediate actions.`);setOut(a);}catch(e){setOut("Error: "+e.message);}setLoading(false);};
+  return(<div className="fade">
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:13}}><div style={{background:C.card2,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.green}33`}}><div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",marginBottom:3}}>Rules tracked</div><div style={{fontSize:22,color:C.green,fontFamily:"'Playfair Display',serif"}}>{WA_RULES.length}</div></div><div style={{background:C.card2,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.orange}33`}}><div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",marginBottom:3}}>High risk</div><div style={{fontSize:22,color:C.orange,fontFamily:"'Playfair Display',serif"}}>{WA_RULES.filter(r=>r.risk==="high").length}</div></div></div>
+    <Btn col={DB.primary} onClick={audit} loading={loading} style={{marginBottom:12}}>Run AI compliance audit</Btn>
+    {out&&<Card style={{marginBottom:12,border:`1px solid ${C.green}44`}}><div style={{padding:"10px 16px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:12,fontWeight:500,color:C.green}}>AI Compliance Audit</div><div style={{padding:13}}><Out text={out}/><div style={{marginTop:7}}><Btn small v="g" onClick={()=>navigator.clipboard.writeText(out)}>Copy</Btn></div></div></Card>}
+    {WA_RULES.map(r=><Card key={r.id} accent={r.risk==="high"?C.rose+"44":C.orange+"33"} style={{marginBottom:8}}><div style={{padding:"11px 14px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}><div style={{flex:1,marginRight:9}}><div style={{fontSize:13,fontWeight:500,color:C.text}}>{r.rule}</div><div style={{fontSize:11,color:C.muted}}>{r.cat}</div></div><div style={{display:"flex",gap:5,flexShrink:0}}><Badge color={r.risk==="high"?C.rose:C.orange}>{r.risk}</Badge><Btn small v="bl" onClick={()=>getAdv(r)}>AI advice</Btn></div></div>{active===r.id&&<Out text={advice[r.id]} loading={loading&&active===r.id}/>}</div></Card>)}
+  </div>);
+}
+
+function MarketTab({data}){
+  const [out,setOut]=useState("");const [loading,setLoading]=useState(false);const [selP,setSelP]=useState((data.properties||[])[0]?.id||null);
+  const gen=async()=>{const p=(data.properties||[]).find(x=>x.id===selP);if(!p)return;setLoading(true);try{const a=await ai(`Perth property market analyst. Monthly landlord update. Real Perth data. Professional, 250 words.`,`Landlord: ${p.landlord}
+Property: ${p.address}
+Rent: $${p.rent}/wk
+Perth data (${PERTH_MARKET.updated}): Median ${PERTH_MARKET.med}, Growth ${PERTH_MARKET.growth}, Vacancy ${PERTH_MARKET.v}, Rent growth ${PERTH_MARKET.rents}. Write monthly investment update: market overview, property performance, outlook, recommendations.`);setOut(a);}catch(e){setOut("Error: "+e.message);}setLoading(false);};
+  return(<div className="fade">
+    <div style={{background:`linear-gradient(135deg,${DB.primary}15,${DB.accent}10)`,border:`1px solid ${DB.primary}33`,borderRadius:13,padding:"15px 17px",marginBottom:13}}>
+      <div style={{fontSize:11,color:DB.primary,fontWeight:600,textTransform:"uppercase",letterSpacing:".1em",marginBottom:9}}>Perth market · {PERTH_MARKET.updated}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:9}}>
+        {[["Median",PERTH_MARKET.med,DB.primary],["Growth",PERTH_MARKET.growth,C.green],["Vacancy",PERTH_MARKET.v,C.blue],["Rent growth",PERTH_MARKET.rents,C.green],["Days on market",PERTH_MARKET.dom+" days",DB.accent],["Gross yield",PERTH_MARKET.yield||"3.8%",C.orange]].map(([l,v,c])=><div key={l} style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"9px 11px"}}><div style={{fontSize:10,color:C.muted,marginBottom:2}}>{l}</div><div style={{fontSize:14,color:c,fontFamily:"'Playfair Display',serif",fontWeight:600}}>{v}</div></div>)}
+      </div>
+    </div>
+    <Card style={{padding:"13px 15px",marginBottom:11}}>
+      <div style={{fontSize:13,fontWeight:500,color:C.text,marginBottom:9}}>Generate landlord market report</div>
+      <Field label="Property"><select value={selP||""} onChange={e=>setSelP(e.target.value)}>{(data.properties||[]).map(p=><option key={p.id} value={p.id}>{p.address.split(",")[0]} — {p.landlord}</option>)}</select></Field>
+      <Notice color={DB.primary}>AI generates a personalised monthly update using live Perth data.</Notice>
+      <Btn col={DB.primary} onClick={gen} loading={loading} disabled={!selP}>Generate landlord report</Btn>
+    </Card>
+    {out&&<Card accent={DB.primary+"44"}><div style={{padding:"10px 15px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:600,color:DB.primary}}>Monthly report ready</span><Badge color={DB.primary}>Done</Badge></div><div style={{padding:13}}><Out text={out}/><div style={{marginTop:7}}><Btn small v="g" onClick={()=>navigator.clipboard.writeText(out)}>Copy</Btn></div></div></Card>}
+  </div>);
+}
+
+function TenantChat({prop}){
+  const [msgs,setMsgs]=useState([{id:"0",role:"bot",text:`Hi! I'm your PropAI assistant. I can help with WA tenant rights, maintenance, your lease, rent and bond questions.\n\nWhat can I help you with?`}]);
+  const [inp,setInp]=useState("");const [loading,setLoading]=useState(false);const endRef=useRef();
+  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+  const send=async()=>{if(!inp.trim()||loading)return;const q=inp.trim();setInp("");setMsgs(p=>[...p,{id:"u"+Date.now(),role:"user",text:q}]);setLoading(true);try{const a=await ai(`Friendly AI assistant for PropAI Perth property platform. Help tenants understand WA tenancy rights. WA Residential Tenancies Act 1987+2023-2024. Warm, practical. Consumer Protection WA: 1300 30 40 54.`,`Tenant at ${prop?.address||"rental"} asks: ${q}`);setMsgs(p=>[...p,{id:"a"+Date.now(),role:"bot",text:a}]);}catch(e){setMsgs(p=>[...p,{id:"e"+Date.now(),role:"bot",text:"Sorry, couldn't connect. Try again."}]);}setLoading(false);};
+  const quick=["7 days notice inspection?","Can landlord refuse pet?","How to get bond back?","Rights for repairs?","Can rent increase?"];
+  return(<div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 130px)"}}>
+    <div style={{flex:1,overflowY:"auto",padding:16,display:"flex",flexDirection:"column",gap:9}}>
+      {msgs.map(m=><div key={m.id} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+        {m.role==="bot"&&<div style={{width:22,height:22,borderRadius:"50%",background:C.purple+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.purple,marginBottom:3,fontWeight:600}}>AI</div>}
+        <div style={{maxWidth:"82%",background:m.role==="user"?C.purple+"20":C.card2,border:`1px solid ${m.role==="user"?C.purple+"40":"rgba(255,255,255,0.07)"}`,borderRadius:11,padding:"9px 13px",fontSize:12,lineHeight:1.75,color:C.text,whiteSpace:"pre-wrap"}}>{m.text}</div>
+      </div>)}
+      {loading&&<div style={{display:"flex",alignItems:"center",gap:7,color:C.muted,fontSize:12}}><Spin col={C.purple}/><span>Thinking…</span></div>}
+      <div ref={endRef}/>
+    </div>
+    {msgs.length<=1&&<div style={{padding:"0 16px 9px",display:"flex",flexWrap:"wrap",gap:5}}>{quick.map(q=><button key={q} onClick={()=>setInp(q)} style={{padding:"4px 11px",borderRadius:20,fontSize:12,border:`1px solid rgba(255,255,255,0.07)`,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>{q}</button>)}</div>}
+    <div style={{padding:"11px 15px",borderTop:`1px solid rgba(255,255,255,0.07)`,display:"flex",gap:8}}>
+      <input type="text" value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask anything about your tenancy…" style={{flex:1}}/>
+      <Btn v="pu" onClick={send} loading={loading} disabled={!inp.trim()}>Send</Btn>
+    </div>
+  </div>);
+}
+
+function PMPortal({data,setData,toast,onAdd}){
+  const [tab,setTab]=useState("dashboard");
+  const brand=data.agency?.brand||DB;const color=brand.primary||DB.primary;const accent=brand.accent||DB.accent;
+  const unread=data.messages.filter(m=>m.from!=="pm"&&!m.read).length;
+  const openMaint=data.maintenance.filter(m=>m.status!=="completed").length;
+  const outstanding=(data.rentLedger||[]).filter(r=>r.status==="outstanding").length;
+  const tabs=[{id:"dashboard",label:"Dashboard",badge:0},{id:"properties",label:"Properties",badge:0},{id:"inspect",label:"New inspection",badge:0},{id:"scheduler",label:"Scheduler",badge:0},{id:"rent",label:"Rent tracker",badge:outstanding},{id:"maintenance",label:"Maintenance",badge:openMaint},{id:"maps",label:"🗺️ Maps",badge:0},{id:"compliance",label:"⚖️ Compliance",badge:0},{id:"market",label:"📊 Market",badge:0},{id:"messages",label:"Messages",badge:unread},{id:"brand",label:"Brand & white label",badge:0}];
+  return(<div style={{display:"flex",minHeight:"100vh"}}>
+    <Sidebar tabs={tabs} active={tab} setTab={setTab} user={{name:data.agency.pmName,sub:data.agency.name,roleLabel:"Property Manager",brandName:brand.name,tagline:brand.tagline,logo:brand.logoUrl}} color={color}/>
+    <main style={{flex:1,minWidth:0,overflowY:"auto"}}>
+      <TopBar title={tabs.find(t=>t.id===tab)?.label} sub={data.agency.name} data={data} color={color} right={<Btn small col={color} onClick={onAdd}>+ Add property</Btn>}/>
+      <div style={{padding:"18px 22px"}}>
+        {tab==="dashboard"  &&<PMDash data={data} onAdd={onAdd} color={color}/>}
+        {tab==="properties" &&<PropList data={data} color={color} accent={accent}/>}
+        {tab==="inspect"    &&<Inspect data={data} setData={setData} toast={toast} color={color} accent={accent}/>}
+        {tab==="scheduler"  &&<Scheduler data={data} setData={setData} toast={toast} color={color}/>}
+        {tab==="rent"       &&<RentTracker data={data} setData={setData} toast={toast} color={color}/>}
+        {tab==="maintenance"&&<Maintenance data={data} setData={setData} toast={toast}/>}
+        {tab==="maps"       &&<PropMap properties={data.properties}/>}
+        {tab==="compliance" &&<ComplianceTab data={data}/>}
+        {tab==="market"     &&<MarketTab data={data}/>}
+        {tab==="messages"   &&<Messages data={data} setData={setData} toast={toast} color={color} accent={accent}/>}
+        {tab==="brand"      &&<BrandSettings data={data} setData={setData} toast={toast}/>}
+      </div>
+    </main>
+  </div>);
+}
+
+function PMDash({data,onAdd,color}){
+  const vacant=data.properties.filter(p=>p.vacant).length;const openMaint=data.maintenance.filter(m=>m.status!=="completed").length;const outstanding=(data.rentLedger||[]).filter(r=>r.status==="outstanding").length;const notifs=genNotifs(data);
+  if(!data.properties.length)return(<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"60px 0",textAlign:"center"}}><div style={{fontSize:36,marginBottom:14,color:C.subtle}}>◆</div><div style={{fontSize:17,fontWeight:500,color:C.text,marginBottom:8}}>Add your first property</div><div style={{fontSize:13,color:C.muted,marginBottom:22,maxWidth:300,lineHeight:1.7}}>PropAI generates unique invite codes for your landlord and tenant.</div><Btn col={color} onClick={onAdd}>Add your first property</Btn></div>);
+  return(<div className="fade">
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}><Stat label="Properties" value={data.properties.length} color={color}/><Stat label="Vacant" value={vacant} color={vacant>0?C.rose:C.green}/><Stat label="Rent outstanding" value={outstanding} color={outstanding>0?C.rose:C.green}/><Stat label="Open maintenance" value={openMaint} color={openMaint>0?C.orange:C.green}/></div>
+    {notifs.length>0&&<div style={{marginBottom:12,display:"flex",flexDirection:"column",gap:5}}>{notifs.slice(0,3).map(n=><div key={n.id} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 13px",background:n.color+"12",border:`1px solid ${n.color}33`,borderRadius:8,fontSize:12}}><div style={{width:6,height:6,borderRadius:"50%",background:n.color}}/><span style={{color:n.color,fontWeight:500}}>{n.title}</span><span style={{color:C.muted}}>— {n.body}</span></div>)}</div>}
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>{data.properties.length>0&&<div style={{padding:"9px 13px",background:DB.primary+"10",border:`1px solid ${DB.primary}22`,borderRadius:9,marginBottom:11,fontSize:12,color:C.muted}}><span style={{color:DB.primary,fontWeight:500}}>Perth · {PERTH_MARKET.updated}: </span>Median {PERTH_MARKET.med} · Growth {PERTH_MARKET.growth} · Vacancy {PERTH_MARKET.v} · Rents {PERTH_MARKET.rents}</div>}
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>{data.properties.map(p=>{const pOut=(data.rentLedger||[]).filter(r=>r.propId===p.id&&r.status==="outstanding").length;const pM=(data.maintenance||[]).filter(m=>m.propId===p.id&&m.status!=="completed").length;return(<Card key={p.id} style={{padding:"13px 17px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:13,fontWeight:500,color:C.text,marginBottom:2}}>{p.address}</div><div style={{fontSize:12,color:C.muted}}>{p.vacant?"VACANT":p.tenant} · {p.vacant?"—":`$${p.rent}/wk`}</div></div><div style={{display:"flex",gap:5}}>{pOut>0&&<Badge color={C.rose}>{pOut} arrears</Badge>}{pM>0&&<Badge color={C.orange}>{pM} maint.</Badge>}{p.vacant&&<Badge color={C.rose}>Vacant</Badge>}{!p.vacant&&!pOut&&!pM&&<Badge color={C.green}>Good</Badge>}</div></div></Card>);})}</div>
+  </div>);
+}
+
+function PropList({data,color,accent}){
+  if(!data.properties.length)return<div style={{textAlign:"center",padding:"40px",color:C.muted}}>No properties yet.</div>;
+  return(<div className="fade" style={{display:"flex",flexDirection:"column",gap:10}}>
+    {data.properties.map(p=><Card key={p.id}>
+      <div style={{padding:"12px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between"}}><div style={{fontSize:13,fontWeight:500,color:C.text}}>{p.address}</div><Badge color={p.vacant?C.rose:C.green}>{p.vacant?"Vacant":"Occupied"}</Badge><button onClick={()=>window.open(`https://www.google.com/maps/search/${encodeURIComponent(p.address+", Western Australia")}`,'_blank')} style={{background:'transparent',border:`1px solid rgba(255,255,255,0.07)`,borderRadius:6,padding:'2px 8px',fontSize:11,color:C.muted,cursor:'pointer',fontFamily:'inherit'}}>🗺️</button></div>
+      <div style={{padding:"12px 17px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12,color:C.muted,marginBottom:10}}><span>Landlord: <span style={{color:C.text}}>{p.landlord}</span></span><span>Tenant: <span style={{color:C.text}}>{p.tenant||"—"}</span></span><span>Rent: <span style={{color,fontWeight:500}}>${p.rent}/wk</span></span><span>Lease ends: <span style={{color:C.text}}>{p.leaseEnd||"—"}</span></span></div>
+        <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{[{code:p.landlordCode,color:accent,label:"LL"},{code:p.tenantCode,color:C.purple,label:"TN"}].filter(x=>x.code).map(x=><div key={x.label} style={{padding:"5px 10px",background:x.color+"1E",border:`1px solid ${x.color}40`,borderRadius:8,fontSize:12}}><span style={{color:C.muted}}>{x.label}: </span><span style={{color:x.color,fontFamily:"monospace",fontWeight:600}}>{x.code}</span><button onClick={()=>navigator.clipboard.writeText(x.code)} style={{marginLeft:7,background:"none",border:"none",color:x.color,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>copy</button></div>)}</div>
+      </div>
+    </Card>)}
+  </div>);
+}
+
+function Inspect({data,setData,toast,color,accent}){
+  const occupied=data.properties.filter(p=>!p.vacant);
+  const [sel,setSel]=useState(occupied[0]?.id||null);
+  const [form,setForm]=useState({overall:"good",rooms:"Living room: good.\nKitchen: good.\nMaster bedroom: excellent.\nBathroom: good.\nExterior: fair.",notes:""});
+  const [photos,setPhotos]=useState([]);const [loading,setLoading]=useState(false);const [done,setDone]=useState(null);
+  if(!occupied.length)return<div style={{textAlign:"center",padding:"40px",color:C.muted}}>No occupied properties.</div>;
+  const run=async()=>{
+    if(!sel)return;const prop=data.properties.find(p=>p.id===sel);setLoading(true);setDone(null);
+    try{
+      const [lR,tR]=await Promise.all([
+        ai(`Perth PM writing landlord investment report. Sections: Overview, Condition, Tenancy Update, Perth Market (sub-1% vacancy), Actions, Forward Look. 250 words.`,`Property: ${prop.address}\nLandlord: ${prop.landlord}\nTenant: ${prop.tenant}\nRent: $${prop.rent}/wk\nCondition: ${form.overall}\nRooms: ${form.rooms}\nNotes: ${form.notes||"None"}`),
+        ai(`Perth PM writing routine inspection notice to tenant. Professional, fair, under 180 words.`,`Property: ${prop.address}\nTenant: ${prop.tenant}\nCondition: ${form.overall}\nRooms: ${form.rooms}\nNotes: ${form.notes||"None"}`)
+      ]);
+      const insp={id:"i"+Date.now(),propId:prop.id,propAddress:prop.address,landlord:prop.landlord,tenant:prop.tenant,overall:form.overall,rooms:form.rooms,notes:form.notes,photos:[...photos],landlordReport:lR,tenantReport:tR,date:now()};
+      const msgs=[{id:"m"+Date.now()+"l",from:"pm",to:"landlord",propId:prop.id,propAddress:prop.address,content:lR,subject:`Inspection Report — ${prop.address}`,date:now(),read:false},{id:"m"+Date.now()+"t",from:"pm",to:"tenant",propId:prop.id,propAddress:prop.address,content:tR,subject:`Your Routine Inspection — ${prop.address}`,date:now(),read:false}];
+      const updated={...data,inspections:[insp,...(data.inspections||[])],messages:[...data.messages,...msgs]};
+      setData(updated);persist(updated);setDone({insp,lR,tR,prop});setPhotos([]);
+      toast("Reports generated & delivered to both portals");
+    }catch(e){toast("Error: "+e.message);}
+    setLoading(false);
+  };
+  return(<div className="fade">
+    <div style={{display:"flex",gap:7,marginBottom:13,flexWrap:"wrap"}}>{occupied.map(p=><button key={p.id} onClick={()=>setSel(p.id)} style={{padding:"6px 13px",borderRadius:8,border:`1px solid ${sel===p.id?color+"66":"rgba(255,255,255,0.07)"}`,background:sel===p.id?color+"1E":"transparent",color:sel===p.id?color:C.muted,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>{p.address.split(",")[0]}</button>)}</div>
+    <Card style={{marginBottom:13}}>
+      <div style={{padding:"12px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,fontWeight:500}}>Inspection details</div>
+      <div style={{padding:15}}>
+        <div style={{marginBottom:11}}><Lbl>Overall condition</Lbl><div style={{display:"flex",gap:6}}>{["excellent","good","fair","poor"].map(c=><button key={c} onClick={()=>setForm(p=>({...p,overall:c}))} style={{padding:"5px 13px",borderRadius:20,fontSize:12,fontWeight:500,border:`1px solid ${form.overall===c?color:"rgba(255,255,255,0.07)"}`,background:form.overall===c?color+"1E":"transparent",color:form.overall===c?color:C.muted,cursor:"pointer",fontFamily:"inherit",textTransform:"capitalize"}}>{c}</button>)}</div></div>
+        <Field label="Room-by-room notes"><textarea rows={4} value={form.rooms} onChange={e=>setForm(p=>({...p,rooms:e.target.value}))}/></Field>
+        <Field label="Additional notes"><textarea rows={2} value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} placeholder="e.g. Tap dripping — needs plumber."/></Field>
+        <div style={{marginBottom:13}}><Lbl>Photos</Lbl><PhotoUp photos={photos} onAdd={ph=>setPhotos(p=>[...p,ph])} onRemove={id=>setPhotos(p=>p.filter(x=>x.id!==id))}/></div>
+        <Notice color={color}>Generates two AI reports simultaneously — landlord investment report + tenant inspection notice.</Notice>
+        <Btn col={color} onClick={run} loading={loading}>Generate & send both reports</Btn>
+      </div>
+    </Card>
+    {done&&<Card accent={color+"44"}>
+      <div style={{padding:"10px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:13,fontWeight:600,color}}>Delivered to both portals ✓</span><div style={{display:"flex",gap:5}}><Badge color={accent}>Landlord</Badge><Badge color={C.purple}>Tenant</Badge></div></div>
+      {done.insp.photos?.length>0&&<div style={{padding:"9px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",gap:6}}>{done.insp.photos.map(ph=><img key={ph.id} src={ph.data} alt="" style={{width:54,height:54,borderRadius:7,objectFit:"cover"}}/>)}</div>}
+      {[{l:"Landlord report",c:accent,t:done.lR},{l:"Tenant notice",c:C.purple,t:done.tR}].map(r=><details key={r.l} style={{borderBottom:`1px solid rgba(255,255,255,0.07)`}}><summary style={{padding:"9px 17px",display:"flex",justifyContent:"space-between",fontSize:13,color:C.text}}><span>{r.l}</span><Badge color={r.c}>View</Badge></summary><div style={{padding:"11px 17px",background:C.bg,borderTop:`1px solid rgba(255,255,255,0.07)`}}><Out text={r.t}/><div style={{marginTop:7}}><Btn small v="g" onClick={()=>navigator.clipboard.writeText(r.t)}>Copy</Btn></div></div></details>)}
+    </Card>}
+  </div>);
+}
+
+function Scheduler({data,setData,toast,color}){
+  const [form,setForm]=useState({propId:"",date:"",time:"09:00",notes:""});const [loading,setLoading]=useState(false);
+  const occupied=data.properties.filter(p=>!p.vacant);const scheduled=data.scheduledInspections||[];
+  const run=()=>{
+    if(!form.propId||!form.date)return;const prop=data.properties.find(p=>p.id===form.propId);setLoading(true);
+    const insp={id:"si"+Date.now(),propId:form.propId,propAddress:prop.address,tenant:prop.tenant,date:form.date,time:form.time,notes:form.notes,status:"scheduled",createdDate:now()};
+    const msgs=[{id:"m"+Date.now()+"t",from:"pm",to:"tenant",propId:form.propId,propAddress:prop.address,content:`Inspection Notice\n\nProperty: ${prop.address}\nDate: ${form.date}\nTime: ${form.time}\n\n7+ days notice as required by WA law.\n${form.notes?`Notes: ${form.notes}`:""}`,subject:`Inspection Notice — ${prop.address}`,date:now(),read:false},{id:"m"+Date.now()+"l",from:"pm",to:"landlord",propId:form.propId,propAddress:prop.address,content:`Inspection scheduled for ${prop.address}\nDate: ${form.date} at ${form.time}`,subject:`Inspection scheduled — ${prop.address}`,date:now(),read:false}];
+    const updated={...data,scheduledInspections:[...scheduled,insp],messages:[...data.messages,...msgs]};
+    setData(updated);persist(updated);setForm({propId:"",date:"",time:"09:00",notes:""});toast("Scheduled — tenant & landlord notified");setLoading(false);
+  };
+  return(<div className="fade">
+    <Card style={{marginBottom:13}}>
+      <div style={{padding:"12px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,fontWeight:500}}>Schedule inspection</div>
+      <div style={{padding:15}}>
+        <Notice color={color}>WA law: 7 days minimum written notice. Tenant and landlord notified automatically.</Notice>
+        <Field label="Property"><select value={form.propId} onChange={e=>setForm(p=>({...p,propId:e.target.value}))}><option value="">Select property…</option>{occupied.map(p=><option key={p.id} value={p.id}>{p.address.split(",")[0]} — {p.tenant}</option>)}</select></Field>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}><Field label="Date"><input type="text" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} placeholder="15 May 2026"/></Field><Field label="Time"><input type="text" value={form.time} onChange={e=>setForm(p=>({...p,time:e.target.value}))} placeholder="09:00"/></Field></div>
+        <Field label="Notes"><textarea rows={2} value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} placeholder="e.g. Access via side gate."/></Field>
+        <Btn col={color} onClick={run} loading={loading} disabled={!form.propId||!form.date}>Schedule & notify</Btn>
+      </div>
+    </Card>
+    {scheduled.length>0&&<div style={{display:"flex",flexDirection:"column",gap:7}}>{[...scheduled].reverse().map(i=>{const c=i.status==="scheduled"?C.blue:i.status==="completed"?"#3ABDA0":C.rose;return<Card key={i.id} accent={c+"44"} style={{padding:"11px 15px"}}><div style={{display:"flex",justifyContent:"space-between"}}><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{i.propAddress}</div><div style={{fontSize:11,color:C.muted,marginTop:1}}>{i.date} · {i.time} · {i.tenant}</div></div><Badge color={c}>{i.status}</Badge></div></Card>;})}
+    </div>}
+  </div>);
+}
+
+function RentTracker({data,setData,toast,color}){
+  const occupied=data.properties.filter(p=>!p.vacant);const [sel,setSel]=useState(occupied[0]?.id||"");const prop=data.properties.find(p=>p.id===sel);const ledger=(data.rentLedger||[]).filter(r=>r.propId===sel);
+  const [f,setF]=useState({period:"",amount:"",status:"paid",note:""});
+  const add=()=>{
+    if(!f.period||!sel)return;const entry={id:"rl"+Date.now(),propId:sel,propAddress:prop.address,period:f.period,amount:parseInt(f.amount)||prop?.rent||0,status:f.status,note:f.note,date:now()};
+    let msgs=[...data.messages];
+    if(f.status==="outstanding"||f.status==="late"){const msg={id:"m"+Date.now(),from:"pm",to:"tenant",propId:sel,propAddress:prop.address,content:`Rent ${f.status} — ${f.period}\nAmount: $${entry.amount}/wk\n${f.status==="outstanding"?"Please make payment ASAP.":"Received late."}`,subject:`Rent notice — ${prop.address}`,date:now(),read:false};msgs=[...msgs,msg];}
+    const lMsg={id:"m"+Date.now()+"l",from:"pm",to:"landlord",propId:sel,propAddress:prop.address,content:`Rent update — ${f.period}\nStatus: ${f.status.toUpperCase()}\nAmount: $${entry.amount}/wk`,subject:`Rent update — ${prop.address}`,date:now(),read:false};
+    const updated={...data,rentLedger:[...(data.rentLedger||[]),entry],messages:[...msgs,lMsg]};setData(updated);persist(updated);setF({period:"",amount:"",status:"paid",note:""});toast("Recorded");
+  };
+  return(<div className="fade">
+    <div style={{display:"flex",gap:7,marginBottom:13,flexWrap:"wrap"}}>{occupied.map(p=><button key={p.id} onClick={()=>setSel(p.id)} style={{padding:"6px 13px",borderRadius:8,border:`1px solid ${sel===p.id?color+"66":"rgba(255,255,255,0.07)"}`,background:sel===p.id?color+"1E":"transparent",color:sel===p.id?color:C.muted,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>{p.address.split(",")[0]}</button>)}</div>
+    {prop&&<>
+      <div style={{display:"flex",gap:10,marginBottom:13}}><Stat label="Collected" value={`$${ledger.filter(r=>r.status==="paid").reduce((s,r)=>s+(r.amount||0),0).toLocaleString()}`} color={C.green}/><Stat label="Outstanding" value={ledger.filter(r=>r.status==="outstanding").length} color={C.rose}/><Stat label="Rent/wk" value={`$${prop.rent}`} color={color}/></div>
+      <Card style={{marginBottom:13}}>
+        <div style={{padding:"12px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,fontWeight:500}}>Record payment</div>
+        <div style={{padding:15}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:9}}><Field label="Period"><input type="text" value={f.period} onChange={e=>setF(p=>({...p,period:e.target.value}))} placeholder="April 2026"/></Field><Field label="Amount ($/wk)"><input type="number" value={f.amount} onChange={e=>setF(p=>({...p,amount:e.target.value}))} placeholder={prop.rent}/></Field><Field label="Status"><select value={f.status} onChange={e=>setF(p=>({...p,status:e.target.value}))}><option value="paid">Paid</option><option value="late">Late</option><option value="outstanding">Outstanding</option></select></Field></div>
+          <Field label="Note"><input type="text" value={f.note} onChange={e=>setF(p=>({...p,note:e.target.value}))} placeholder="Optional note"/></Field>
+          <Btn col={color} onClick={add} disabled={!f.period}>Record payment</Btn>
+        </div>
+      </Card>
+      <Card>{!ledger.length&&<div style={{padding:"20px",textAlign:"center",fontSize:12,color:C.muted}}>No records yet.</div>}{[...ledger].reverse().map(r=>{const c=r.status==="paid"?C.green:r.status==="outstanding"?C.rose:C.orange;return<div key={r.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 17px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,alignItems:"center"}}><div><span style={{color:C.text}}>{r.period}</span>{r.note&&<span style={{fontSize:11,color:C.muted,marginLeft:7}}>{r.note}</span>}</div><div style={{display:"flex",gap:7,alignItems:"center"}}><span>${r.amount}/wk</span><Badge color={c}>{r.status}</Badge></div></div>;})}
+      </Card>
+    </>}
+  </div>);
+}
+
+function Maintenance({data,setData,toast}){
+  const approve=(mId)=>{const m=data.maintenance.find(x=>x.id===mId);const msg={id:"m"+Date.now(),from:"pm",to:"landlord",propId:m.propId,propAddress:m.propAddress,content:`Maintenance approval needed\nIssue: ${m.description}\nUrgency: ${m.urgency}`,subject:`Maintenance approval — ${m.propAddress}`,date:now(),read:false};const u={...data,maintenance:data.maintenance.map(x=>x.id===mId?{...x,status:"approved"}:x),messages:[...data.messages,msg]};setData(u);persist(u);toast("Sent to landlord");};
+  const complete=(mId)=>{const m=data.maintenance.find(x=>x.id===mId);const tMsg={id:"m"+Date.now(),from:"pm",to:"tenant",propId:m.propId,propAddress:m.propAddress,content:`Maintenance completed.\nIssue: ${m.description}`,subject:`Maintenance completed — ${m.propAddress}`,date:now(),read:false};const u={...data,maintenance:data.maintenance.map(x=>x.id===mId?{...x,status:"completed"}:x),messages:[...data.messages,tMsg]};setData(u);persist(u);toast("Completed");};
+  const open=data.maintenance.filter(m=>m.status!=="completed");const done_=data.maintenance.filter(m=>m.status==="completed");
+  if(!data.maintenance.length)return<div style={{textAlign:"center",padding:"40px",color:C.muted}}>No maintenance requests yet.</div>;
+  return(<div className="fade" style={{display:"flex",flexDirection:"column",gap:9}}>
+    {open.map(m=>{const st=MS[m.status]||MS.pending;return(<Card key={m.id} accent={st.c+"44"}><div style={{padding:"11px 15px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between"}}><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{m.description}</div><div style={{fontSize:11,color:C.muted,marginTop:1}}>{m.propAddress} · {m.urgency} · {m.date}</div></div><Badge color={st.c}>{st.l}</Badge></div>{m.photos?.length>0&&<div style={{padding:"8px 15px",display:"flex",gap:5}}>{m.photos.map(ph=><img key={ph.id} src={ph.data} alt="" style={{width:48,height:48,borderRadius:6,objectFit:"cover"}}/>)}</div>}<div style={{padding:"9px 15px",display:"flex",gap:6}}>{m.status==="pending"&&<Btn small v="bl" onClick={()=>approve(m.id)}>Send to landlord</Btn>}{m.status==="landlord_approved"&&<Btn small v="gr" onClick={()=>complete(m.id)}>Mark complete</Btn>}{m.status==="landlord_declined"&&<span style={{fontSize:11,color:C.rose}}>Declined</span>}</div></Card>);})}
+    {done_.length>0&&done_.map(m=><Card key={m.id} style={{padding:"9px 15px",opacity:.6}}><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:C.text}}>{m.description}</span><Badge color="#3ABDA0">Done</Badge></div></Card>)}
+  </div>);
+}
+
+function Messages({data,setData,toast,color,accent}){
+  const [replies,setReplies]=useState({});const msgs=[...data.messages].reverse();
+  const send=(msg)=>{const txt=replies[msg.id];if(!txt?.trim())return;const m={id:"m"+Date.now(),from:"pm",to:msg.from,propId:msg.propId,propAddress:msg.propAddress,content:txt,subject:"Re: "+msg.subject,date:now(),read:false};const u={...data,messages:[...data.messages,m]};setData(u);persist(u);setReplies(p=>({...p,[msg.id]:""}));toast("Sent");};
+  const markRead=(id)=>{const u={...data,messages:data.messages.map(m=>m.id===id?{...m,read:true}:m)};setData(u);persist(u);};
+  if(!msgs.length)return<div style={{textAlign:"center",padding:"40px",color:C.muted}}>No messages yet.</div>;
+  return(<div className="fade" style={{display:"flex",flexDirection:"column",gap:9}}>
+    {msgs.map(m=>{const isIn=m.from!=="pm";const col=m.from==="landlord"?accent:m.from==="tenant"?C.purple:color;if(isIn&&!m.read)setTimeout(()=>markRead(m.id),800);return(<Card key={m.id} accent={!m.read&&isIn?col+"44":undefined}><div style={{padding:"10px 15px",borderBottom:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{display:"flex",alignItems:"center",gap:7}}><Avatar name={m.from.slice(0,2)} color={col} size={24}/><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{m.subject}</div><div style={{fontSize:11,color:C.muted}}>{m.from} · {m.date}</div></div></div><div style={{display:"flex",gap:5}}>{!m.read&&isIn&&<Badge color={col}>New</Badge>}<Badge color={col}>{m.from}</Badge></div></div><div style={{padding:13}}><div style={{background:C.bg,border:`1px solid rgba(255,255,255,0.07)`,borderRadius:8,padding:"9px 12px",fontSize:12,lineHeight:1.75,color:C.text,whiteSpace:"pre-wrap",maxHeight:100,overflowY:"auto",marginBottom:8}}>{m.content}</div><div style={{display:"flex",gap:5}}><input type="text" value={replies[m.id]||""} onChange={e=>setReplies(p=>({...p,[m.id]:e.target.value}))} placeholder="Reply…" style={{flex:1,padding:"6px 11px"}} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send(m)}/><Btn small col={color} onClick={()=>send(m)}>Send</Btn></div></div></Card>);})}
+  </div>);
+}
+
+function BrandSettings({data,setData,toast}){
+  const brand=data.agency?.brand||DB;const [f,setF]=useState({...DB,...brand});const logoRef=useRef();
+  const upd=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const handleLogo=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>setF(p=>({...p,logoUrl:ev.target.result}));r.readAsDataURL(file);e.target.value="";};
+  const save_=()=>{const u={...data,agency:{...data.agency,brand:f}};setData(u);persist(u);toast("Brand saved — all portals updated");};
+  const presets=[["Gold","#D4A843","#3ABDA0"],["Navy","#3B6EE8","#E09050"],["Forest","#2E7D52","#D4A843"],["Rose","#C0475A","#5B8DEF"],["Slate","#5E7599","#4CAF82"]];
+  return(<div className="fade">
+    <Notice color={f.primary}>Your brand applies across all portals. Every landlord and tenant sees your agency, not PropAI.</Notice>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <Card style={{padding:18}}><div style={{fontSize:13,fontWeight:500,color:C.text,marginBottom:13}}>Identity</div><Field label="Agency name"><input type="text" value={f.name} onChange={upd("name")} placeholder="Your Agency Name"/></Field><Field label="Tagline"><input type="text" value={f.tagline} onChange={upd("tagline")} placeholder="Perth Property Management"/></Field><Field label="Logo"><div style={{display:"flex",gap:8,alignItems:"center"}}>{f.logoUrl?<img src={f.logoUrl} alt="logo" style={{height:30,borderRadius:6}}/>:<div style={{height:30,width:60,borderRadius:6,border:`1px dashed rgba(255,255,255,0.1)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.muted}}>No logo</div>}<Btn small v="g" onClick={()=>logoRef.current.click()}>Upload</Btn>{f.logoUrl&&<Btn small v="ro" onClick={()=>setF(p=>({...p,logoUrl:null}))}>Remove</Btn>}</div><input ref={logoRef} type="file" accept="image/*" onChange={handleLogo} style={{display:"none"}}/></Field></Card>
+      <Card style={{padding:18}}><div style={{fontSize:13,fontWeight:500,color:C.text,marginBottom:13}}>Colours</div><Field label="Primary"><div style={{display:"flex",gap:8,alignItems:"center"}}><input type="color" value={f.primary} onChange={upd("primary")} style={{width:42,padding:3}}/><input type="text" value={f.primary} onChange={upd("primary")} style={{flex:1}}/></div></Field><Field label="Accent"><div style={{display:"flex",gap:8,alignItems:"center"}}><input type="color" value={f.accent} onChange={upd("accent")} style={{width:42,padding:3}}/><input type="text" value={f.accent} onChange={upd("accent")} style={{flex:1}}/></div></Field><div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4}}>{presets.map(([n,p,a])=><button key={n} onClick={()=>setF(v=>({...v,primary:p,accent:a}))} style={{padding:"4px 10px",borderRadius:20,fontSize:11,border:`1px solid ${f.primary===p?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.07)"}`,background:f.primary===p?p+"22":"transparent",color:f.primary===p?p:C.muted,cursor:"pointer",fontFamily:"inherit"}}>{n}</button>)}</div></Card>
+    </div>
+    <div style={{padding:"14px 16px",background:C.card,border:`1px solid ${f.primary}44`,borderRadius:12,marginBottom:14}}>
+      <Lbl>Preview</Lbl>
+      <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",background:C.surf,borderRadius:9,marginBottom:10}}>{f.logoUrl?<img src={f.logoUrl} alt="" style={{height:20,objectFit:"contain"}}/>:<span style={{fontFamily:"'Playfair Display',serif",fontSize:16,color:C.text}}>{f.name}</span>}<span style={{fontSize:10,color:C.muted}}>{f.tagline}</span></div>
+      <div style={{display:"flex",gap:7}}><div style={{padding:"6px 12px",borderRadius:8,background:f.primary,color:"#0B0E16",fontSize:12,fontWeight:500}}>Primary</div><div style={{padding:"6px 12px",borderRadius:8,background:f.accent+"1E",color:f.accent,border:`1px solid ${f.accent}40`,fontSize:12}}>Accent</div></div>
+    </div>
+    <Btn col={f.primary} onClick={save_}>Save brand settings</Btn>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LANDLORD PORTAL
+// ══════════════════════════════════════════════════════════════════════════════
+function LandlordPortal({data,propId,landlordName,toast}){
+  const prop=data.properties.find(p=>p.id===propId)||data.properties[0];
+  const brand=data.agency?.brand||DB;const color=brand.accent||DB.accent;const primary=brand.primary||DB.primary;
+  const [tab,setTab]=useState("overview");const [localData,setLD]=useState(data);const upd=u=>{setLD(u);persist(u);};
+  const myMsgs=localData.messages.filter(m=>m.propId===prop?.id&&(m.to==="landlord"||m.from==="landlord"));
+  const unread=myMsgs.filter(m=>m.to==="landlord"&&!m.read).length;
+  const pendingMaint=localData.maintenance.filter(m=>m.propId===prop?.id&&m.status==="approved").length;
+  const myInsp=(localData.inspections||[]).filter(i=>i.propId===prop?.id);
+  const rentLedger=(localData.rentLedger||[]).filter(r=>r.propId===prop?.id);
+  const annualRent=(prop?.rent||0)*52;const [txt,setTxt]=useState("");
+  const sendMsg=()=>{if(!txt.trim())return;const m={id:"m"+Date.now(),from:"landlord",to:"pm",propId:prop.id,propAddress:prop.address,content:txt,subject:`Message — ${prop.address}`,date:now(),read:false};upd({...localData,messages:[...localData.messages,m]});setTxt("");toast("Sent");};
+  const decide=(mId,dec)=>{const m=localData.maintenance.find(x=>x.id===mId);const ns=dec==="approve"?"landlord_approved":"landlord_declined";const tMsg={id:"m"+Date.now(),from:"pm",to:"tenant",propId:prop.id,propAddress:prop.address,content:dec==="approve"?`Maintenance approved.\nIssue: ${m.description}`:`Maintenance declined.\nIssue: ${m.description}`,subject:`Maintenance update — ${prop.address}`,date:now(),read:false};upd({...localData,maintenance:localData.maintenance.map(x=>x.id===mId?{...x,status:ns}:x),messages:[...localData.messages,tMsg]});toast(dec==="approve"?"Approved":"Declined");};
+  const tabs=[{id:"overview",label:"Overview",badge:0},{id:"financial",label:"Financials",badge:0},{id:"maintenance",label:"Maintenance",badge:pendingMaint},{id:"messages",label:"Messages",badge:unread}];
+  return(<div style={{display:"flex",minHeight:"100vh"}}>
+    <Sidebar tabs={tabs} active={tab} setTab={setTab} user={{name:landlordName||prop?.landlord||"Landlord",sub:"Property owner",roleLabel:"Landlord Portal",brandName:brand.name,tagline:brand.tagline,logo:brand.logoUrl}} color={color}/>
+    <main style={{flex:1,minWidth:0,overflowY:"auto"}}>
+      <TopBar title={tabs.find(t=>t.id===tab)?.label} sub={prop?.address} data={localData} color={color} right={<Badge color={color}>Landlord</Badge>}/>
+      <div style={{padding:"18px 22px"}}>
+        {tab==="overview"&&<div className="fade"><div style={{display:"flex",gap:10,marginBottom:14}}><Stat label="Weekly rent" value={`$${prop?.rent||0}`} color={color}/><Stat label="Annual gross" value={`$${annualRent.toLocaleString()}`} color={C.green}/><Stat label="Paid on time" value={rentLedger.filter(r=>r.status==="paid").length} color={primary}/></div><Notice color={color}>Perth: Vacancy &lt;1% · Rents +5% YoY · Capital growth +18.4%</Notice>{myInsp.slice(0,3).map(i=><details key={i.id} style={{marginBottom:8}}><summary style={{padding:"10px 14px",background:C.card2,borderRadius:10,border:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between",fontSize:13,color:C.text}}><span>Inspection — {i.date}</span><Badge color={color}>Read</Badge></summary><div style={{padding:"11px 14px",background:C.bg,borderRadius:"0 0 10px 10px",border:`1px solid rgba(255,255,255,0.07)`,borderTop:"none",fontSize:12,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap"}}>{i.landlordReport}</div></details>)}</div>}
+        {tab==="financial"&&<div className="fade"><div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:13}}>{[["Annual gross",`$${annualRent.toLocaleString()}`,C.green],["PM fees (8.5%)",`-$${Math.round(annualRent*.085).toLocaleString()}`,C.rose],["Net est.",`$${(annualRent-Math.round(annualRent*.085)).toLocaleString()}`,primary]].map(([l,v,c])=><div key={l} style={{background:C.card2,borderRadius:10,padding:"13px 15px"}}><div style={{fontSize:10,color:C.muted,textTransform:"uppercase",letterSpacing:".08em",marginBottom:4}}>{l}</div><div style={{fontSize:19,color:c,fontFamily:"'Playfair Display',serif"}}>{v}</div></div>)}</div>{rentLedger.length>0&&<Card>{rentLedger.map(r=>{const c=r.status==="paid"?C.green:r.status==="outstanding"?C.rose:C.orange;return<div key={r.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 16px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13}}><span style={{color:C.text}}>{r.period}</span><div style={{display:"flex",gap:7,alignItems:"center"}}><span>${r.amount}/wk</span><Badge color={c}>{r.status}</Badge></div></div>;})}  </Card>}</div>}
+        {tab==="maintenance"&&<div className="fade" style={{display:"flex",flexDirection:"column",gap:9}}>{!localData.maintenance.filter(m=>m.propId===prop?.id).length&&<div style={{textAlign:"center",padding:"38px",color:C.muted}}>No maintenance requests.</div>}{localData.maintenance.filter(m=>m.propId===prop?.id).map(m=>{const st=MS[m.status]||MS.pending;return<Card key={m.id} accent={st.c+"44"} style={{padding:"13px 16px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:13,fontWeight:500,color:C.text}}>{m.description}</div><div style={{fontSize:11,color:C.muted,marginTop:1}}>{m.date} · {m.urgency}</div></div><Badge color={st.c}>{st.l}</Badge></div>{m.status==="approved"&&<div style={{marginTop:9,display:"flex",gap:7}}><Btn small v="gr" onClick={()=>decide(m.id,"approve")}>Approve</Btn><Btn small v="ro" onClick={()=>decide(m.id,"decline")}>Decline</Btn></div>}</Card>;})} </div>}
+        {tab==="messages"&&<div className="fade"><div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,marginBottom:11}}>{!myMsgs.length&&<div style={{textAlign:"center",padding:"26px",color:C.muted,fontSize:12}}>No messages yet.</div>}{myMsgs.map(m=><Bubble key={m.id} msg={m} isMe={m.from==="landlord"} color={color}/>)}</div><div style={{display:"flex",gap:8}}><textarea rows={2} value={txt} onChange={e=>setTxt(e.target.value)} placeholder="Message your property manager…" style={{flex:1,resize:"none"}}/><Btn col={color} onClick={sendMsg}>Send</Btn></div></div>}
+      </div>
+    </main>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TENANT PORTAL
+// ══════════════════════════════════════════════════════════════════════════════
+function TenantPortal({data,propId,tenantName,toast}){
+  const prop=data.properties.find(p=>p.id===propId)||data.properties[0];
+  const brand=data.agency?.brand||DB;
+  const [tab,setTab]=useState("home");const [localData,setLD]=useState(data);const upd=u=>{setLD(u);persist(u);};
+  const myMsgs=localData.messages.filter(m=>m.propId===prop?.id&&(m.to==="tenant"||m.from==="tenant"));
+  const unread=myMsgs.filter(m=>m.to==="tenant"&&!m.read).length;
+  const myReqs=localData.maintenance.filter(m=>m.propId===prop?.id);
+  const myInsp=(localData.inspections||[]).filter(i=>i.propId===prop?.id);
+  const rentLedger=(localData.rentLedger||[]).filter(r=>r.propId===prop?.id);
+  const scheduledInsp=(localData.scheduledInspections||[]).filter(i=>i.propId===prop?.id&&i.status==="scheduled");
+  const [photos,setPhotos]=useState([]);const [mForm,setMForm]=useState({type:"maintenance",description:"",urgency:"normal"});const [sub_,setSub]=useState(false);const [txt,setTxt]=useState("");
+  const [rQ,setRQ]=useState("");const [rOut,setROut]=useState("");const [rL,setRL]=useState(false);
+  const leaseEnd=new Date((prop?.leaseEnd||"2027-01-01").split(" ").reverse().join("-"));
+  const daysLeft=Math.max(0,Math.round((leaseEnd-new Date())/864e5));
+  const sendMsg=()=>{if(!txt.trim())return;const m={id:"m"+Date.now(),from:"tenant",to:"pm",propId:prop.id,propAddress:prop.address,content:txt,subject:`Message — ${prop.address}`,date:now(),read:false};upd({...localData,messages:[...localData.messages,m]});setTxt("");toast("Sent");};
+  const submitMaint=()=>{if(!mForm.description.trim())return;setSub(true);const req={id:"maint"+Date.now(),propId:prop.id,propAddress:prop.address,...mForm,estimatedCost:"TBC",status:"pending",date:now(),submittedBy:"tenant",photos:[...photos]};const msg={id:"m"+Date.now(),from:"tenant",to:"pm",propId:prop.id,propAddress:prop.address,content:`New maintenance request (${mForm.urgency}):\n\n${mForm.description}${photos.length?`\n${photos.length} photo(s).`:""}`,subject:`Maintenance request — ${prop.address}`,date:now(),read:false};upd({...localData,maintenance:[...localData.maintenance,req],messages:[...localData.messages,msg]});setMForm({type:"maintenance",description:"",urgency:"normal"});setPhotos([]);toast("Request submitted");setSub(false);};
+  const getAdvice=async()=>{if(!rQ.trim())return;setRL(true);setROut("");try{const r=await ai(`WA tenant rights advisor. Plain English. WA Residential Tenancies Act 1987 + 2023-2024 reforms. Direct answer → Rights → What to do → Consumer Protection WA 1300 30 40 54.`,`WA tenant question: ${rQ}`);setROut(r);}catch(e){setROut("Error: "+e.message);}setRL(false);};
+  const tabs=[{id:"home",label:"My home",badge:0},{id:"maintenance",label:"Maintenance",badge:myReqs.filter(m=>m.status!=="completed").length},{id:"messages",label:"Messages",badge:unread},{id:"rights",label:"Know my rights",badge:0},{id:"aichat",label:"🤖 AI Help",badge:0},{id:"payments",label:"Rent history",badge:0}];
+  return(<div style={{display:"flex",minHeight:"100vh"}}>
+    <Sidebar tabs={tabs} active={tab} setTab={setTab} user={{name:tenantName||prop?.tenant||"Tenant",sub:"Tenant portal",roleLabel:"Tenant Portal",brandName:brand.name,tagline:brand.tagline,logo:brand.logoUrl}} color={C.purple}/>
+    <main style={{flex:1,minWidth:0,overflowY:"auto"}}>
+      <TopBar title={tabs.find(t=>t.id===tab)?.label} sub={prop?.address} data={localData} color={C.purple} right={<Badge color={C.purple}>Tenant</Badge>}/>
+      <div style={{padding:"18px 22px"}}>
+        {tab==="home"&&<div className="fade"><div style={{display:"flex",gap:10,marginBottom:14}}><Stat label="Weekly rent" value={`$${prop?.rent||0}`} color={C.purple}/><Stat label="Lease ends in" value={`${daysLeft}d`} color={daysLeft<90?C.orange:"#3ABDA0"} sub={prop?.leaseEnd||"—"}/><Stat label="Open requests" value={myReqs.filter(m=>m.status!=="completed").length} color={C.orange}/></div>{scheduledInsp.length>0&&<Notice color={C.blue}><strong>Upcoming inspection:</strong> {scheduledInsp[0].date} at {scheduledInsp[0].time}. Please ensure the property is accessible.</Notice>}{daysLeft<90&&<Notice color={C.orange}>Lease expires in {daysLeft} days. Contact your PM to discuss renewal.</Notice>}{myInsp.slice(0,2).map(i=><details key={i.id} style={{marginBottom:8}}><summary style={{padding:"9px 13px",background:C.card2,borderRadius:10,border:`1px solid rgba(255,255,255,0.07)`,display:"flex",justifyContent:"space-between",fontSize:13,color:C.text}}><span>Inspection — {i.date}</span><Badge color={C.purple}>View</Badge></summary><div style={{padding:"10px 13px",background:C.bg,borderRadius:"0 0 10px 10px",border:`1px solid rgba(255,255,255,0.07)`,borderTop:"none",fontSize:12,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap"}}>{i.tenantReport}</div></details>)}</div>}
+        {tab==="maintenance"&&<div className="fade"><Card style={{marginBottom:13}}><div style={{padding:"12px 16px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13,fontWeight:500}}>Submit a request</div><div style={{padding:14}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}><Field label="Type"><select value={mForm.type} onChange={e=>setMForm(p=>({...p,type:e.target.value}))}><option value="maintenance">Maintenance/repair</option><option value="safety">Safety concern</option><option value="other">Other</option></select></Field><Field label="Urgency"><select value={mForm.urgency} onChange={e=>setMForm(p=>({...p,urgency:e.target.value}))}><option value="emergency">Emergency</option><option value="urgent">Urgent — 48hrs</option><option value="normal">Normal — 2 weeks</option><option value="low">Low priority</option></select></Field></div><Field label="Description"><textarea rows={3} value={mForm.description} onChange={e=>setMForm(p=>({...p,description:e.target.value}))} placeholder="Describe the issue clearly…"/></Field><div style={{marginBottom:13}}><Lbl>Photos (optional)</Lbl><PhotoUp photos={photos} onAdd={ph=>setPhotos(p=>[...p,ph])} onRemove={id=>setPhotos(p=>p.filter(x=>x.id!==id))}/></div><Btn v="pu" onClick={submitMaint} loading={sub_} disabled={!mForm.description.trim()}>Submit request</Btn></div></Card>{myReqs.length>0&&<div style={{display:"flex",flexDirection:"column",gap:8}}>{myReqs.map(m=>{const st=MS[m.status]||MS.pending;return<Card key={m.id} accent={st.c+"44"} style={{padding:"11px 15px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><div style={{fontSize:13,color:C.text}}>{m.description}</div><div style={{fontSize:11,color:C.muted,marginTop:1}}>{m.date} · {m.urgency}</div>{m.photos?.length>0&&<div style={{display:"flex",gap:4,marginTop:5}}>{m.photos.map(ph=><img key={ph.id} src={ph.data} alt="" style={{width:38,height:38,borderRadius:5,objectFit:"cover"}}/>)}</div>}</div><Badge color={st.c}>{st.l}</Badge></div></Card>;})}  </div>}</div>}
+        {tab==="messages"&&<div className="fade"><div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,marginBottom:11}}>{!myMsgs.length&&<div style={{textAlign:"center",padding:"26px",color:C.muted,fontSize:12}}>No messages yet.</div>}{myMsgs.map(m=><Bubble key={m.id} msg={m} isMe={m.from==="tenant"} color={C.purple}/>)}</div><div style={{display:"flex",gap:8}}><textarea rows={2} value={txt} onChange={e=>setTxt(e.target.value)} placeholder="Message your property manager…" style={{flex:1,resize:"none"}}/><Btn v="pu" onClick={sendMsg}>Send</Btn></div></div>}
+        {tab==="aichat"&&<TenantChat prop={prop}/>}
+        {tab==="rights"&&<div className="fade"><Notice color={C.purple}>WA Residential Tenancies Act 1987 + 2023-2024 reforms.</Notice><div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:13}}>{["Can my landlord refuse a pet?","Notice for inspections?","Can I challenge a rent increase?","What happens to my bond?","My maintenance isn't being fixed","Can the landlord enter without notice?"].map(q=><button key={q} onClick={()=>setRQ(q)} style={{padding:"5px 12px",borderRadius:20,fontSize:12,border:`1px solid rgba(255,255,255,0.07)`,background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>{q}</button>)}</div><Field label="Your question"><textarea rows={3} value={rQ} onChange={e=>setRQ(e.target.value)} placeholder="Ask anything about your rights as a WA tenant…"/></Field><Btn v="pu" onClick={getAdvice} loading={rL} disabled={!rQ.trim()}>Get advice</Btn>{(rOut||rL)&&<Card style={{marginTop:13}}><div style={{padding:14}}><Out text={rOut} loading={rL}/>{rOut&&!rL&&<><Notice color={C.orange} style={{marginTop:9}}>Guidance only. Consumer Protection WA: 1300 30 40 54</Notice><Btn small v="g" onClick={()=>navigator.clipboard.writeText(rOut)}>Copy</Btn></>}</div></Card>}</div>}
+        {tab==="payments"&&<div className="fade"><div style={{fontSize:12,color:C.muted,marginBottom:11}}>Your official rent record — useful for future rental applications.</div>{!rentLedger.length?<div style={{textAlign:"center",padding:"28px",color:C.muted,fontSize:12}}>Payment records will appear here.</div>:<Card>{[...rentLedger].reverse().map(r=>{const c=r.status==="paid"?C.green:r.status==="outstanding"?C.rose:C.orange;return<div key={r.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 16px",borderBottom:`1px solid rgba(255,255,255,0.07)`,fontSize:13}}><span style={{color:C.text}}>{r.period}</span><div style={{display:"flex",gap:7}}><span>${r.amount}/wk</span><Badge color={c}>{r.status}</Badge></div></div>;})}  </Card>}</div>}
+      </div>
+    </main>
+  </div>);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ROOT
+// ══════════════════════════════════════════════════════════════════════════════
+function App(){
+  const [screen,setScreen]=useState("loading");
+  const [data,setData]=useState(null);
+  const [session,setSession]=useState(null);
+  const [toast_,setToast]=useState("");
+  const [addingProp,setAddingProp]=useState(false);
+  const [selectedPlan,setSelectedPlan]=useState(null);
+  const [billing,setBilling]=useState("monthly");
+  const [paidDetails,setPaidDetails]=useState(null);
+
+  useEffect(()=>{
+    const d=load();
+    setData(d);
+    if(d?.agency) setScreen("app-welcome");
+    else setScreen("pricing");
+  },[]);
+
+  const showToast=useCallback(msg=>{setToast(msg);setTimeout(()=>setToast(""),2500);},[]);
+  const updData=useCallback(u=>{setData(u);persist(u);},[]);
+  const brand=data?.agency?.brand||DB;
+
+  if(screen==="loading")return<div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",color:C.muted,fontFamily:"'Outfit',sans-serif"}}>Loading…</div>;
+
+  return(<div>
+    {/* PAYMENT FLOW */}
+    {screen==="pricing"  &&<PricingPage onSelectPlan={(plan,bil)=>{setSelectedPlan(plan);setBilling(bil);setScreen("checkout");}} onLogin={()=>setScreen("app-welcome")}/>}
+    {screen==="checkout" &&selectedPlan&&<CheckoutPage plan={selectedPlan} billing={billing} onBack={()=>setScreen("pricing")} onSuccess={d=>{setPaidDetails(d);setScreen("success");}}/>}
+    {screen==="success"  &&<SuccessPage details={paidDetails||{plan:"growth",email:"you@agency.com.au"}} onEnterApp={()=>setScreen("app-welcome")}/>}
+
+    {/* APP LOGIN */}
+    {screen==="app-welcome"&&!addingProp&&<AppWelcome brand={brand} onChoice={c=>{if(c==="pm-signup")setScreen("pm-signup");else if(c==="enter-code")setScreen("enter-code");else if(c==="pm-login"){if(data?.agency)setScreen("pm-login");else setScreen("pm-signup");}}}/>}
+    {screen==="pm-signup" &&<PMSignup onComplete={d=>{setData(d);persist(d);setSession({role:"pm"});setScreen("app");setAddingProp(true);}}/>}
+    {screen==="pm-login"  &&data?.agency&&<PMLogin saved={data} onLogin={()=>{setSession({role:"pm"});setScreen("app");}} onBack={()=>setScreen("app-welcome")}/>}
+    {screen==="enter-code"&&<CodeLogin saved={data} onLogin={info=>{setSession({role:info.role,propId:info.propId,name:info.name});setScreen("app");}} onBack={()=>setScreen("app-welcome")}/>}
+
+    {/* MAIN APP */}
+    {screen==="app"&&session&&!addingProp&&(<>
+      {session.role==="pm"      &&<PMPortal data={data} setData={updData} toast={showToast} onAdd={()=>setAddingProp(true)}/>}
+      {session.role==="landlord"&&<LandlordPortal data={data} propId={session.propId} landlordName={session.name} toast={showToast}/>}
+      {session.role==="tenant"  &&<TenantPortal data={data} propId={session.propId} tenantName={session.name} toast={showToast}/>}
+    </>)}
+    {addingProp&&data&&<AddProp data={data} setData={updData} toast={showToast} onDone={()=>{setAddingProp(false);if(!session)setSession({role:"pm"});setScreen("app");}}/>}
+
+    {/* DEV SWITCHER */}
+    {screen==="app"&&!addingProp&&data?.properties?.length>0&&<div style={{position:"fixed",bottom:12,right:12,zIndex:200,display:"flex",gap:3,background:C.surf,border:`1px solid rgba(255,255,255,0.07)`,borderRadius:10,padding:3,flexWrap:"wrap",maxWidth:320}}>
+      <button onClick={()=>setSession({role:"pm"})} style={{padding:"4px 9px",borderRadius:7,fontSize:10,border:"none",background:session?.role==="pm"?"rgba(212,168,67,0.15)":"transparent",color:session?.role==="pm"?"#D4A843":C.muted,cursor:"pointer",fontFamily:"inherit"}}>PM</button>
+      {data.properties.map(p=>[
+        <button key={`ll${p.id}`} onClick={()=>setSession({role:"landlord",propId:p.id,name:p.landlord})} style={{padding:"4px 8px",borderRadius:7,fontSize:10,border:"none",background:session?.role==="landlord"&&session?.propId===p.id?"rgba(58,189,160,0.15)":"transparent",color:session?.role==="landlord"&&session?.propId===p.id?"#3ABDA0":C.muted,cursor:"pointer",fontFamily:"inherit"}}>LL</button>,
+        !p.vacant&&p.tenant&&<button key={`tn${p.id}`} onClick={()=>setSession({role:"tenant",propId:p.id,name:p.tenant})} style={{padding:"4px 8px",borderRadius:7,fontSize:10,border:"none",background:session?.role==="tenant"&&session?.propId===p.id?"rgba(155,127,232,0.15)":"transparent",color:session?.role==="tenant"&&session?.propId===p.id?C.purple:C.muted,cursor:"pointer",fontFamily:"inherit"}}>TN</button>
+      ])}
+      <button onClick={()=>setScreen("pricing")} style={{padding:"4px 8px",borderRadius:7,fontSize:10,border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>💳</button>
+      <button onClick={()=>{setScreen("app-welcome");setSession(null);}} style={{padding:"4px 8px",borderRadius:7,fontSize:10,border:"none",background:"transparent",color:C.muted,cursor:"pointer",fontFamily:"inherit"}}>Out</button>
+    </div>}
+
+    {toast_&&<div style={{position:"fixed",bottom:52,left:"50%",transform:"translateX(-50%)",background:C.surf,border:`1px solid ${brand.primary}44`,color:brand.primary,padding:"8px 16px",borderRadius:9,fontSize:13,fontWeight:500,zIndex:999,whiteSpace:"nowrap"}}>{toast_}</div>}
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
